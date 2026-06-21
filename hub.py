@@ -1,22 +1,19 @@
-"""Shared state + WebSocket broadcaster used by BOTH the admin and viewer apps.
+"""Shared state + guest registry used by BOTH the admin and viewer apps.
 
-Admin and viewer apps run in the same Python process (see main.py) so they
-share this one Hub instance: the playback state, the admin connections, and the
-guest registry.
+No WebSockets: the admin mutates state via HTTP, and viewers poll for it.
+Admin and viewer apps run in the same process (see main.py) so they share this
+one Hub instance.
 
-Access model: a viewer must "knock" with a name and be APPROVED by an admin
-before they receive any video state. Admins can deny a pending request or kick
-an approved viewer at any time.
+Access model: a viewer "knocks" with a name (POST /knock) and gets a token
+(gid). They poll GET /state?gid=... ; until an admin approves them they only see
+their access status, not the video state. Admins approve / deny / kick via HTTP.
 """
 from __future__ import annotations
 
-import asyncio
 import secrets
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-
-from fastapi import WebSocket
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -49,117 +46,21 @@ class PlaybackState:
 class Guest:
     gid: str
     name: str
-    ws: WebSocket
-    status: str = "pending"   # "pending" | "approved"
+    status: str = "pending"          # pending | approved | denied | kicked
     joined: float = field(default_factory=time.time)
+    last_seen: float = field(default_factory=time.time)
 
 
 class Hub:
+    # A guest is considered gone if we haven't heard a poll in this long.
+    GUEST_TTL = 12.0
+
     def __init__(self) -> None:
         self.state = PlaybackState()
-        self._admins: set[WebSocket] = set()
-        self._guests: dict[str, Guest] = {}      # gid -> Guest
-        self._lock = asyncio.Lock()
-
-    # --- admins ---------------------------------------------------------------
-    async def connect_admin(self, ws: WebSocket) -> None:
-        await ws.accept()
-        self._admins.add(ws)
-        await self._send(ws, {"type": "state", **self.state.snapshot()})
-        await self._send_guest_list(ws)
-
-    def disconnect_admin(self, ws: WebSocket) -> None:
-        self._admins.discard(ws)
-
-    # --- viewers / guests -----------------------------------------------------
-    async def connect_viewer(self, ws: WebSocket) -> None:
-        """Accept the socket but send nothing until the guest is approved."""
-        await ws.accept()
-
-    async def knock(self, ws: WebSocket, name: str) -> str:
-        """Register a pending join request and notify all admins."""
-        gid = secrets.token_urlsafe(8)
-        name = (name or "Guest").strip()[:40] or "Guest"
-        self._guests[gid] = Guest(gid=gid, name=name, ws=ws, status="pending")
-        await self._send(ws, {"type": "pending"})
-        await self.broadcast_guests()
-        return gid
-
-    async def auto_join(self, ws: WebSocket, name: str = "Guest") -> str:
-        """Open-access mode: register the viewer already approved and send state
-        immediately (no admin approval needed)."""
-        gid = secrets.token_urlsafe(8)
-        name = (name or "Guest").strip()[:40] or "Guest"
-        self._guests[gid] = Guest(gid=gid, name=name, ws=ws, status="approved")
-        await self._send(ws, {"type": "approved"})
-        await self._send(ws, {"type": "state", **self.state.snapshot()})
-        await self.broadcast_guests()
-        return gid
-
-    async def approve(self, gid: str) -> None:
-        g = self._guests.get(gid)
-        if not g:
-            return
-        g.status = "approved"
-        await self._send(g.ws, {"type": "approved"})
-        await self._send(g.ws, {"type": "state", **self.state.snapshot()})
-        await self.broadcast_guests()
-
-    async def deny(self, gid: str) -> None:
-        await self._remove_guest(gid, reason="denied")
-
-    async def kick(self, gid: str) -> None:
-        await self._remove_guest(gid, reason="kicked")
-
-    async def _remove_guest(self, gid: str, reason: str) -> None:
-        g = self._guests.pop(gid, None)
-        if not g:
-            return
-        await self._send(g.ws, {"type": reason})
-        try:
-            await g.ws.close(code=4403)
-        except Exception:
-            pass
-        await self.broadcast_guests()
-
-    def disconnect_viewer(self, ws: WebSocket) -> None:
-        gid = next((k for k, v in self._guests.items() if v.ws is ws), None)
-        if gid:
-            self._guests.pop(gid, None)
-
-    def find_gid(self, ws: WebSocket) -> str | None:
-        return next((k for k, v in self._guests.items() if v.ws is ws), None)
-
-    # --- broadcasting ---------------------------------------------------------
-    def _approved(self) -> list[Guest]:
-        return [g for g in self._guests.values() if g.status == "approved"]
-
-    async def broadcast(self) -> None:
-        msg = {"type": "state", **self.state.snapshot()}
-        for ws in list(self._admins) + [g.ws for g in self._approved()]:
-            await self._send(ws, msg)
-
-    def _guest_payload(self) -> dict:
-        return {
-            "type": "guests",
-            "guests": [
-                {"gid": g.gid, "name": g.name, "status": g.status}
-                for g in sorted(self._guests.values(), key=lambda x: x.joined)
-            ],
-            "approved": len(self._approved()),
-            "pending": sum(1 for g in self._guests.values() if g.status == "pending"),
-        }
-
-    async def broadcast_guests(self) -> None:
-        payload = self._guest_payload()
-        for ws in list(self._admins):
-            await self._send(ws, payload)
-
-    async def _send_guest_list(self, ws: WebSocket) -> None:
-        await self._send(ws, self._guest_payload())
+        self._guests: dict[str, Guest] = {}
 
     # --- admin drives playback ------------------------------------------------
-    async def apply_admin_event(self, event: dict) -> None:
+    def apply_admin_event(self, event: dict) -> dict:
         action = event.get("action")
         s = self.state
 
@@ -188,18 +89,54 @@ class Hub:
         elif action == "sync":
             s.position = float(event.get("position", s.live_position()))
             s.is_playing = bool(event.get("is_playing", s.is_playing))
-        else:
-            return
 
         s.last_update = time.time()
-        await self.broadcast()
+        return self.state.snapshot()
 
-    @staticmethod
-    async def _send(ws: WebSocket, msg: dict) -> None:
-        try:
-            await ws.send_json(msg)
-        except Exception:
-            pass
+    # --- guests ---------------------------------------------------------------
+    def knock(self, name: str) -> str:
+        self._prune()
+        gid = secrets.token_urlsafe(8)
+        name = (name or "Guest").strip()[:40] or "Guest"
+        self._guests[gid] = Guest(gid=gid, name=name, status="pending")
+        return gid
+
+    def set_status(self, gid: str, status: str) -> bool:
+        g = self._guests.get(gid)
+        if not g:
+            return False
+        g.status = status
+        g.last_seen = time.time()
+        return True
+
+    def viewer_state(self, gid: str) -> dict:
+        """Polled by viewers. Returns access status (+ playback if approved)."""
+        g = self._guests.get(gid)
+        if not g:
+            return {"access": "none"}
+        g.last_seen = time.time()
+        if g.status == "approved":
+            return {"access": "approved", **self.state.snapshot()}
+        return {"access": g.status}
+
+    def guests_payload(self) -> dict:
+        """Polled by admins to render pending requests + watchers."""
+        self._prune()
+        guests = sorted(self._guests.values(), key=lambda x: x.joined)
+        return {
+            "guests": [
+                {"gid": g.gid, "name": g.name, "status": g.status} for g in guests
+            ],
+            "approved": sum(1 for g in guests if g.status == "approved"),
+            "pending": sum(1 for g in guests if g.status == "pending"),
+        }
+
+    def _prune(self) -> None:
+        now = time.time()
+        dead = [gid for gid, g in self._guests.items()
+                if now - g.last_seen > self.GUEST_TTL]
+        for gid in dead:
+            self._guests.pop(gid, None)
 
 
 hub = Hub()

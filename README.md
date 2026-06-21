@@ -84,13 +84,37 @@ docker run -d --name moviehouse \
 ## How it works
 
 - **One process, two apps** (`admin.py`, `viewer.py`) share a single in-memory
-  `Hub` (`hub.py`) holding the playback state and all WebSocket connections.
-- The admin's player events (play/pause/seek/ratechange) are pushed over a
-  WebSocket to the hub, which rebroadcasts the new state to every viewer.
+  `Hub` (`hub.py`) holding the playback state and the guest registry.
+- **No WebSockets** — everything is plain HTTP, so it works through any reverse
+  proxy or tunnel with no upgrade config. The admin POSTs controls to
+  `/control`; viewers poll `GET /state` ~ once a second and sync.
 - State stores *position + server timestamp*, so a viewer (or a late joiner)
-  computes the true live position and snaps into sync; a heartbeat every few
-  seconds corrects drift.
+  computes the true live position and snaps into sync.
 - Video is streamed with HTTP **Range** support (`media.py`) so seeking works.
+
+### API
+
+Admin (port 10457, login-protected):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET/POST | `/login`, `/logout` | SSO auth, session cookie |
+| GET | `/` | Dashboard |
+| POST | `/upload` | Upload a video |
+| GET | `/videos` | List videos |
+| GET | `/video/{name}` | Stream (Range) |
+| POST | `/control` | Apply play/pause/seek/rate/load/subtitle/audio_track/sync |
+| GET | `/guests` | Poll pending requests + watchers |
+| POST | `/guests` | `{action: approve\|deny\|kick, gid}` |
+
+Viewer (port 10458, open):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/` | Viewer page |
+| GET | `/video/{name}` | Stream (Range) |
+| POST | `/knock` | `{name}` → `{gid}` request access |
+| GET | `/state?gid=` | Poll access status + playback |
 
 ## Supported video formats
 

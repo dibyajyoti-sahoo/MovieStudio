@@ -1,16 +1,16 @@
 """Admin app — runs on ADMIN_PORT. Full control: upload + play/pause/seek/
-speed/subtitles/audio. Every control is broadcast to viewers in real time.
+speed/subtitles/audio. Controls update shared state over plain HTTP; viewers
+poll for it (no WebSockets).
 
 Protected by SSO login (see auth.py): you must sign in with your auth-server
 account before you can see the dashboard, upload, or control playback.
 """
 from __future__ import annotations
 
-import json
 import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect, Form
+from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import config
@@ -100,7 +100,7 @@ async def upload(request: Request, file: UploadFile = File(...)):
     dest = UPLOAD_DIR / safe
     with dest.open("wb") as out:
         shutil.copyfileobj(file.file, out)
-    await hub.apply_admin_event({"action": "load", "filename": safe})
+    hub.apply_admin_event({"action": "load", "filename": safe})
     return {"filename": safe}
 
 
@@ -120,32 +120,36 @@ async def video(request: Request, filename: str):
     return serve_video(filename, request)
 
 
-@app.websocket("/ws")
-async def ws_admin(ws: WebSocket):
-    # Guard the control channel: only a logged-in admin may drive playback.
-    if not auth.session_email(ws.cookies.get(config.COOKIE_NAME)):
-        await ws.close(code=4401)  # 4401 = our "unauthenticated" code
-        return
-    await hub.connect_admin(ws)
-    try:
-        while True:
-            raw = await ws.receive_text()
-            try:
-                event = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if not isinstance(event, dict):
-                continue
-            action = event.get("action")
-            if action == "approve":
-                await hub.approve(event.get("gid"))
-            elif action == "deny":
-                await hub.deny(event.get("gid"))
-            elif action == "kick":
-                await hub.kick(event.get("gid"))
-            else:
-                await hub.apply_admin_event(event)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        hub.disconnect_admin(ws)
+# --- realtime-ish control over plain HTTP (replaces the WebSocket) -----------
+@app.post("/control")
+async def control(request: Request):
+    """Apply a playback action (play/pause/seek/rate/load/subtitle/audio_track/
+    sync). Returns the new state. Admin-only."""
+    if not _current_email(request):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    event = await request.json()
+    if not isinstance(event, dict):
+        return JSONResponse({"error": "bad payload"}, status_code=400)
+    return hub.apply_admin_event(event)
+
+
+@app.get("/guests")
+async def guests(request: Request):
+    """Admin polls this to see pending requests + who's watching."""
+    if not _current_email(request):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    return hub.guests_payload()
+
+
+@app.post("/guests")
+async def guest_action(request: Request):
+    """Approve / deny / kick a viewer. Body: {action, gid}. Admin-only."""
+    if not _current_email(request):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    body = await request.json()
+    action, gid = body.get("action"), body.get("gid")
+    mapping = {"approve": "approved", "deny": "denied", "kick": "kicked"}
+    if action not in mapping or not gid:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    hub.set_status(gid, mapping[action])
+    return hub.guests_payload()

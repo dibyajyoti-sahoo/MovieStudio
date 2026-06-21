@@ -31,10 +31,3 @@ ADMIN_EMAILS = {e.strip().lower() for e in _allow.split(",") if e.strip()}
 # Admin session cookie lifetime (seconds). Default 12 hours.
 SESSION_TTL = int(os.environ.get("MH_SESSION_TTL", str(12 * 3600)))
 COOKIE_NAME = "mh_admin"
-
-# Require admin to approve each viewer ("knock to enter")?
-#   MH_REQUIRE_APPROVAL=1  -> viewers must request access and be approved
-#   default (off)          -> anyone who opens the viewer link watches directly
-REQUIRE_APPROVAL = os.environ.get("MH_REQUIRE_APPROVAL", "0").lower() in (
-    "1", "true", "yes", "on"
-)

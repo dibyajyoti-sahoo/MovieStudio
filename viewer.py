@@ -1,15 +1,15 @@
-"""Viewer app — runs on VIEWER_PORT. Watch-only: playback follows the admin
-via WebSocket. Viewers cannot control anything; their player has no controls.
+"""Viewer app — runs on VIEWER_PORT. Watch-only: playback follows the admin.
+
+No WebSockets. The viewer knocks (POST /knock) to request access, then polls
+GET /state?gid=... a few times a second to stay in sync once approved.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
-import config
 from hub import hub
 from media import serve_video
 
@@ -20,7 +20,6 @@ TEMPLATES = Path(__file__).parent / "templates"
 @app.get("/", response_class=HTMLResponse)
 async def index():
     html = (TEMPLATES / "viewer.html").read_text(encoding="utf-8")
-    html = html.replace("{{approval}}", "true" if config.REQUIRE_APPROVAL else "false")
     return HTMLResponse(html)
 
 
@@ -29,24 +28,16 @@ async def video(filename: str, request: Request):
     return serve_video(filename, request)
 
 
-@app.websocket("/ws")
-async def ws_viewer(ws: WebSocket):
-    await hub.connect_viewer(ws)  # accepted
-    if not config.REQUIRE_APPROVAL:
-        # Open access: approve immediately, viewer starts watching right away.
-        await hub.auto_join(ws)
-    try:
-        while True:
-            raw = await ws.receive_text()
-            try:
-                msg = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                continue  # ignore non-JSON frames (e.g. stale clients, pings)
-            if isinstance(msg, dict) and msg.get("type") == "knock" and config.REQUIRE_APPROVAL:
-                await hub.knock(ws, msg.get("name", "Guest"))
-            # viewers cannot drive playback; everything else is ignored
-    except WebSocketDisconnect:
-        pass
-    finally:
-        hub.disconnect_viewer(ws)
-        await hub.broadcast_guests()
+@app.post("/knock")
+async def knock(request: Request):
+    """Viewer requests access with a name. Returns a token (gid) to poll with."""
+    body = await request.json()
+    name = (body or {}).get("name", "Guest")
+    gid = hub.knock(name)
+    return {"gid": gid}
+
+
+@app.get("/state")
+async def state(gid: str = ""):
+    """Polled by the viewer. Returns access status, plus playback if approved."""
+    return JSONResponse(hub.viewer_state(gid))

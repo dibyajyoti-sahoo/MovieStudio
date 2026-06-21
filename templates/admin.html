@@ -128,37 +128,42 @@ const statusEl = document.getElementById('status');
 const connEl = document.getElementById('conn');
 const viewersEl = document.getElementById('viewers');
 
-let suppress = false;            // when true, don't echo events back to server
-let ws;
-
-function send(obj) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+// Send a control action to the server over plain HTTP (no WebSocket).
+async function send(obj) {
+  try {
+    const r = await fetch('/control', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(obj)
+    });
+    if (r.status === 401) { location.href = '/login'; return; }
+    connEl.textContent = 'live'; connEl.classList.add('live');
+  } catch (e) {
+    connEl.textContent = 'offline'; connEl.classList.remove('live');
+  }
 }
 
-// ---- WebSocket: receive shared state (keeps multiple admins in agreement) ---
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  ws = new WebSocket(`${proto}${location.host}/ws`);
-  ws.onopen = () => { connEl.textContent = 'live'; connEl.classList.add('live'); };
-  ws.onclose = (ev) => {
-    connEl.classList.remove('live');
-    if (ev.code === 4401) {            // server rejected us: not signed in
-      connEl.textContent = 'signed out';
-      location.href = '/login';
-      return;
-    }
-    connEl.textContent = 'reconnecting…';
-    setTimeout(connect, 1000);
-  };
-  ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
-    if (m.type === 'guests') { renderGuests(m); return; }
-    if (m.type === 'state') applyState(m);
-  };
+// Poll the guest list (pending requests + current watchers).
+async function pollGuests() {
+  try {
+    const r = await fetch('/guests');
+    if (r.status === 401) { location.href = '/login'; return; }
+    renderGuests(await r.json());
+    connEl.textContent = 'live'; connEl.classList.add('live');
+  } catch (e) {
+    connEl.textContent = 'offline'; connEl.classList.remove('live');
+  }
 }
 
 // ---- access requests + watching list ----
-function guestAction(action, gid) { send({ action, gid }); }
+async function guestAction(action, gid) {
+  try {
+    const r = await fetch('/guests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, gid })
+    });
+    if (r.ok) renderGuests(await r.json());
+  } catch (e) {}
+}
 
 function renderGuests(m) {
   viewersEl.textContent = `👁 ${m.approved} watching`;
@@ -192,24 +197,8 @@ function renderGuests(m) {
 function esc(s) { return String(s).replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-function applyState(s) {
-  suppress = true;
-  if (s.filename && currentFile() !== s.filename) loadFile(s.filename, false);
-  if (s.filename) {
-    const target = s.position + (s.is_playing ? (Date.now()/1000 - s.server_time) * s.rate : 0);
-    if (Math.abs(player.currentTime - target) > 0.6) player.currentTime = target;
-    if (Math.abs(player.playbackRate - s.rate) > 0.01) player.playbackRate = s.rate;
-    speedSelect.value = String(s.rate);
-    if (s.is_playing && player.paused) player.play().catch(()=>{});
-    if (!s.is_playing && !player.paused) player.pause();
-  }
-  setTimeout(() => suppress = false, 50);
-}
-
-function currentFile() {
-  const src = player.getAttribute('data-file');
-  return src || "";
-}
+// The admin's own player is the source of truth — no remote state to apply.
+let suppress = false;
 
 function loadFile(name, broadcast = true) {
   player.setAttribute('data-file', name);
@@ -307,7 +296,8 @@ document.getElementById('copyBtn').onclick = () => {
 };
 document.getElementById('openBtn').onclick = () => window.open(document.getElementById('viewerUrl').value, '_blank');
 
-connect();
+pollGuests();
+setInterval(pollGuests, 2000);
 refreshVideos(CURRENT || null);
 </script>
 </body>

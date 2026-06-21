@@ -83,13 +83,11 @@
 </div>
 
 <script>
-const APPROVAL_REQUIRED = {{approval}};   // injected by the server
-
 const player = document.getElementById('player');
 const dot = document.getElementById('dot');
 const tag = document.getElementById('tag');
 
-let ws, myName = "", approved = false, started = false, finished = false, lastState = null;
+let myName = "", gid = "", approved = false, started = false, finished = false, lastState = null;
 
 function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
@@ -98,31 +96,41 @@ function show(id) {
 }
 function hideOverlay() { document.getElementById('overlay').classList.add('hidden'); }
 
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  ws = new WebSocket(`${proto}${location.host}/ws`);
-  ws.onopen = () => {
-    dot.classList.add('live'); tag.textContent = 'connected';
-    if (APPROVAL_REQUIRED && myName && !finished) knock();   // re-knock after a reconnect
-  };
-  ws.onclose = () => {
-    dot.classList.remove('live');
-    if (!finished) { tag.textContent = 'reconnecting…'; setTimeout(connect, 1000); }
-  };
-  ws.onmessage = (e) => {
-    const m = JSON.parse(e.data);
-    if (m.type === 'pending')  { tag.textContent = 'waiting for host'; show('s-wait'); }
-    else if (m.type === 'approved') { approved = true; tag.textContent = 'approved'; if (!started) show('s-start'); }
-    else if (m.type === 'state')    { lastState = m; if (started) applyState(m); }
-    else if (m.type === 'denied')   { finished = true; deniedScreen('Request denied', 'The host didn’t let you in.'); }
-    else if (m.type === 'kicked')   { finished = true; deniedScreen('Removed', 'The host removed you from the room.'); }
-  };
+// Request access, then start polling for state (no WebSocket).
+async function knock() {
+  try {
+    const r = await fetch('/knock', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: myName })
+    });
+    const d = await r.json();
+    gid = d.gid;
+    document.getElementById('waitName').textContent =
+      `Sent as "${myName}". Waiting for the host to approve…`;
+    show('s-wait');
+  } catch (e) { tag.textContent = 'connection error'; }
 }
 
-function knock() {
-  ws.send(JSON.stringify({ type: 'knock', name: myName }));
-  document.getElementById('waitName').textContent = `Sent as "${myName}". Waiting for the host to approve…`;
-  show('s-wait');
+async function poll() {
+  if (finished || !gid) return;
+  try {
+    const r = await fetch(`/state?gid=${encodeURIComponent(gid)}`);
+    const m = await r.json();
+    dot.classList.add('live');
+    if (m.access === 'pending') { tag.textContent = 'waiting for host'; if (!started) show('s-wait'); }
+    else if (m.access === 'approved') {
+      approved = true; lastState = m;
+      if (!started) { tag.textContent = 'approved'; show('s-start'); }
+      else applyState(m);
+    }
+    else if (m.access === 'denied') { finished = true; deniedScreen('Request denied', 'The host didn’t let you in.'); }
+    else if (m.access === 'kicked') { finished = true; deniedScreen('Removed', 'The host removed you from the room.'); }
+    else if (m.access === 'none')   {  // token expired — ask again
+      gid = ''; if (myName) knock();
+    }
+  } catch (e) {
+    dot.classList.remove('live'); tag.textContent = 'reconnecting…';
+  }
 }
 
 function deniedScreen(title, msg) {
@@ -180,11 +188,8 @@ document.addEventListener('keydown', (e) => {
 });
 setInterval(() => { if (started && lastState) applyState(lastState); }, 2500);
 
-// Open-access mode: no name, no waiting — show the start button straight away.
-// The server auto-approves on connect and pushes state.
-if (APPROVAL_REQUIRED) { show('s-name'); } else { show('s-start'); }
-
-connect();
+// Poll the server for access + playback state ~ every 1.2s.
+setInterval(poll, 1200);
 </script>
 </body>
 </html>
