@@ -76,8 +76,11 @@ async def index(request: Request):
     email = _current_email(request)
     if not email:
         return RedirectResponse("/login", status_code=303)
-    viewer_host = config.PUBLIC_HOST or request.url.hostname or "localhost"
-    viewer_url = f"http://{viewer_host}:{config.VIEWER_PORT}/"
+    if config.VIEWER_URL:
+        viewer_url = config.VIEWER_URL
+    else:
+        viewer_host = config.PUBLIC_HOST or request.url.hostname or "localhost"
+        viewer_url = f"http://{viewer_host}:{config.VIEWER_PORT}/"
     return HTMLResponse(_render("admin.html", viewer_url=viewer_url,
                                 current=hub.state.filename or "", email=email))
 

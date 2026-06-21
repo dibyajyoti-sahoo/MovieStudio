@@ -47,6 +47,40 @@ network**. To let people join from anywhere, put it behind a tunnel:
 ngrok http 8002      # gives a public https URL for viewers
 ```
 
+## Run with Docker
+
+Both ports run in one container: **admin 10457**, **viewer 10458**.
+
+```bash
+docker compose up --build -d
+```
+
+Then:
+
+- Admin: `http://<host>:10457/`
+- Viewer (share): `http://<host>:10458/`
+
+Set the host viewers should see in the shared link, and your SSO, via env (or a
+`.env` file next to `docker-compose.yml`):
+
+```bash
+MH_PUBLIC_HOST=192.168.1.92            # or your public hostname
+MH_SSO_BASE_URL=https://secure.dibyajyoti.dpdns.org
+MH_ADMIN_EMAILS=you@example.com        # optional allowlist
+```
+
+Uploaded videos persist in the `moviehouse_uploads` Docker volume. To run the
+image directly without compose:
+
+```bash
+docker build -t moviehouse .
+docker run -d --name moviehouse \
+  -p 10457:10457 -p 10458:10458 \
+  -e MH_PUBLIC_HOST=192.168.1.92 \
+  -v moviehouse_uploads:/app/uploads \
+  moviehouse
+```
+
 ## How it works
 
 - **One process, two apps** (`admin.py`, `viewer.py`) share a single in-memory

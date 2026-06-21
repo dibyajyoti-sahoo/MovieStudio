@@ -9,6 +9,11 @@ HOST = os.environ.get("MH_HOST", "0.0.0.0")
 # machine's LAN address at runtime if not set (see main.py).
 PUBLIC_HOST = os.environ.get("MH_PUBLIC_HOST", "")
 
+# Exact viewer URL shown in the admin "share" box. Use this when the viewer
+# app sits behind its own domain (e.g. https://moviehouse-viewer.example.com/).
+# If empty, the link is built from PUBLIC_HOST + VIEWER_PORT.
+VIEWER_URL = os.environ.get("MH_VIEWER_URL", "").strip()
+
 # Max upload size in bytes (default 4 GiB). Set MH_MAX_UPLOAD=0 to disable.
 MAX_UPLOAD = int(os.environ.get("MH_MAX_UPLOAD", str(4 * 1024 * 1024 * 1024)))
 

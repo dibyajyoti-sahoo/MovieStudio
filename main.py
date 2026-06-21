@@ -34,8 +34,12 @@ def lan_ip() -> str:
 async def main() -> None:
     host_for_links = config.PUBLIC_HOST or lan_ip()
 
-    admin_cfg = uvicorn.Config(admin_app, host=config.HOST, port=config.ADMIN_PORT, log_level="info")
-    viewer_cfg = uvicorn.Config(viewer_app, host=config.HOST, port=config.VIEWER_PORT, log_level="info")
+    # proxy_headers + forwarded_allow_ips so the app trusts X-Forwarded-* from
+    # the reverse proxy / tunnel (correct https scheme, client IP, and WS upgrade).
+    admin_cfg = uvicorn.Config(admin_app, host=config.HOST, port=config.ADMIN_PORT,
+                               log_level="info", proxy_headers=True, forwarded_allow_ips="*")
+    viewer_cfg = uvicorn.Config(viewer_app, host=config.HOST, port=config.VIEWER_PORT,
+                                log_level="info", proxy_headers=True, forwarded_allow_ips="*")
     admin_server = uvicorn.Server(admin_cfg)
     viewer_server = uvicorn.Server(viewer_cfg)
 

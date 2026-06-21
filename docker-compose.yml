@@ -15,6 +15,9 @@ services:
       # LAN IP or public hostname, otherwise the printed link uses the request
       # host (usually fine). Example: "192.168.1.92" or "watch.example.com".
       MH_PUBLIC_HOST: "${MH_PUBLIC_HOST:-}"
+      # When admin & viewer are on separate public domains, set the exact viewer
+      # link shown in the admin share box, e.g. https://moviehouse-viewer.example.com/
+      MH_VIEWER_URL: "${MH_VIEWER_URL:-}"
       # Your SSO auth server (admin login calls <base>/auth/signin).
       MH_SSO_BASE_URL: "${MH_SSO_BASE_URL:-https://secure.dibyajyoti.dpdns.org}"
       # Optional comma-separated admin email allowlist (empty = allow any).

@@ -97,7 +97,8 @@ function show(id) {
 function hideOverlay() { document.getElementById('overlay').classList.add('hidden'); }
 
 function connect() {
-  ws = new WebSocket(`ws://${location.host}/ws`);
+  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  ws = new WebSocket(`${proto}${location.host}/ws`);
   ws.onopen = () => {
     dot.classList.add('live'); tag.textContent = 'connected';
     if (myName && !finished) knock();   // re-knock after a reconnect
