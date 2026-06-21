@@ -85,6 +85,17 @@ class Hub:
         await self.broadcast_guests()
         return gid
 
+    async def auto_join(self, ws: WebSocket, name: str = "Guest") -> str:
+        """Open-access mode: register the viewer already approved and send state
+        immediately (no admin approval needed)."""
+        gid = secrets.token_urlsafe(8)
+        name = (name or "Guest").strip()[:40] or "Guest"
+        self._guests[gid] = Guest(gid=gid, name=name, ws=ws, status="approved")
+        await self._send(ws, {"type": "approved"})
+        await self._send(ws, {"type": "state", **self.state.snapshot()})
+        await self.broadcast_guests()
+        return gid
+
     async def approve(self, gid: str) -> None:
         g = self._guests.get(gid)
         if not g:

@@ -83,6 +83,8 @@
 </div>
 
 <script>
+const APPROVAL_REQUIRED = {{approval}};   // injected by the server
+
 const player = document.getElementById('player');
 const dot = document.getElementById('dot');
 const tag = document.getElementById('tag');
@@ -101,7 +103,7 @@ function connect() {
   ws = new WebSocket(`${proto}${location.host}/ws`);
   ws.onopen = () => {
     dot.classList.add('live'); tag.textContent = 'connected';
-    if (myName && !finished) knock();   // re-knock after a reconnect
+    if (APPROVAL_REQUIRED && myName && !finished) knock();   // re-knock after a reconnect
   };
   ws.onclose = () => {
     dot.classList.remove('live');
@@ -177,6 +179,10 @@ document.addEventListener('keydown', (e) => {
   if ([' ', 'k', 'ArrowLeft', 'ArrowRight', 'f'].includes(e.key)) e.preventDefault();
 });
 setInterval(() => { if (started && lastState) applyState(lastState); }, 2500);
+
+// Open-access mode: no name, no waiting — show the start button straight away.
+// The server auto-approves on connect and pushes state.
+if (APPROVAL_REQUIRED) { show('s-name'); } else { show('s-start'); }
 
 connect();
 </script>

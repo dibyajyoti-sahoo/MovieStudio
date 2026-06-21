@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
+import config
 from hub import hub
 from media import serve_video
 
@@ -19,6 +20,7 @@ TEMPLATES = Path(__file__).parent / "templates"
 @app.get("/", response_class=HTMLResponse)
 async def index():
     html = (TEMPLATES / "viewer.html").read_text(encoding="utf-8")
+    html = html.replace("{{approval}}", "true" if config.REQUIRE_APPROVAL else "false")
     return HTMLResponse(html)
 
 
@@ -29,7 +31,10 @@ async def video(filename: str, request: Request):
 
 @app.websocket("/ws")
 async def ws_viewer(ws: WebSocket):
-    await hub.connect_viewer(ws)  # accepted, but no state until approved
+    await hub.connect_viewer(ws)  # accepted
+    if not config.REQUIRE_APPROVAL:
+        # Open access: approve immediately, viewer starts watching right away.
+        await hub.auto_join(ws)
     try:
         while True:
             raw = await ws.receive_text()
@@ -37,7 +42,7 @@ async def ws_viewer(ws: WebSocket):
                 msg = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
                 continue  # ignore non-JSON frames (e.g. stale clients, pings)
-            if isinstance(msg, dict) and msg.get("type") == "knock":
+            if isinstance(msg, dict) and msg.get("type") == "knock" and config.REQUIRE_APPROVAL:
                 await hub.knock(ws, msg.get("name", "Guest"))
             # viewers cannot drive playback; everything else is ignored
     except WebSocketDisconnect:
