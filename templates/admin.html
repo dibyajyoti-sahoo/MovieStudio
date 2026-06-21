@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MovieHouse — Admin</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background: #0e0f13; color: #e8e8ea; }
+  header { padding: 14px 20px; background: #15171d; border-bottom: 1px solid #23252d;
+           display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .badge { font-size: 12px; background: #2a6df4; padding: 2px 8px; border-radius: 999px; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px; }
+  .card { background: #15171d; border: 1px solid #23252d; border-radius: 12px;
+          padding: 16px; margin-bottom: 16px; }
+  label { font-size: 13px; color: #a9adba; display: block; margin-bottom: 6px; }
+  select, input[type=file] { width: 100%; padding: 9px; background: #0e0f13;
+          color: #e8e8ea; border: 1px solid #2c2f3a; border-radius: 8px; font-size: 14px; }
+  video { width: 100%; border-radius: 10px; background: #000; margin-top: 8px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .row > * { flex: 1; min-width: 160px; }
+  button { background: #2a6df4; color: #fff; border: 0; padding: 9px 14px;
+           border-radius: 8px; font-size: 14px; cursor: pointer; }
+  button.secondary { background: #2c2f3a; }
+  button:hover { filter: brightness(1.08); }
+  .link-box { display: flex; gap: 8px; align-items: center; }
+  .link-box input { flex: 1; padding: 9px; background: #0e0f13; color: #6fd28a;
+           border: 1px solid #2c2f3a; border-radius: 8px; font-size: 13px; }
+  .muted { color: #8b8f9c; font-size: 13px; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: #1d2230; }
+  #status { font-size: 13px; color: #8b8f9c; margin-top: 8px; }
+  .live { color: #6fd28a; }
+  .guest { display: flex; align-items: center; gap: 10px; padding: 9px 11px;
+           background: #0e0f13; border: 1px solid #23252d; border-radius: 9px; margin-top: 8px; }
+  .guest .nm { flex: 1; font-size: 14px; }
+  .guest .when { font-size: 12px; color: #6b6f7c; }
+  .guest button { padding: 6px 12px; font-size: 13px; }
+  .approve { background: #1e7a3c; }
+  .deny, .kick { background: #7a2330; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎬 MovieHouse</h1><span class="badge">ADMIN</span>
+  <span class="pill" id="viewers">👁 0 watching</span>
+  <span class="pill" id="conn">connecting…</span>
+  <span style="flex:1"></span>
+  <span class="pill" title="signed in">👤 {{email}}</span>
+  <form method="post" action="/logout" style="margin:0;">
+    <button class="secondary" style="padding:6px 12px;">Sign out</button>
+  </form>
+</header>
+<main>
+
+  <div class="card">
+    <label>Upload a video (browser-playable: mp4, webm, m4v, mov)</label>
+    <div class="row">
+      <input type="file" id="fileInput" accept="video/*">
+      <button id="uploadBtn" style="flex:0 0 auto;">Upload</button>
+    </div>
+    <div id="uploadStatus" class="muted" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <label>Now playing</label>
+    <select id="videoSelect"></select>
+    <video id="player" controls playsinline></video>
+    <div id="status">No video loaded.</div>
+
+    <div class="row" style="margin-top:12px;">
+      <div>
+        <label>Speed</label>
+        <select id="speedSelect">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="0.75">0.75×</option>
+          <option value="1" selected>1× (normal)</option>
+          <option value="1.25">1.25×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2×</option>
+        </select>
+      </div>
+      <div>
+        <label>Subtitles / captions</label>
+        <select id="subSelect"><option value="">Off</option></select>
+      </div>
+      <div>
+        <label>Audio track</label>
+        <select id="audioSelect"><option value="">Default</option></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Share this link with viewers (watch-only — they cannot control)</label>
+    <div class="link-box">
+      <input id="viewerUrl" readonly value="{{viewer_url}}">
+      <button id="copyBtn" style="flex:0 0 auto;">Copy</button>
+      <button id="openBtn" class="secondary" style="flex:0 0 auto;">Open</button>
+    </div>
+    <div class="muted" style="margin-top:8px;">
+      Everything you do here — play, pause, seek, speed, captions — happens on every viewer's screen instantly.
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Access requests <span id="pendCount" class="pill" style="background:#3a2e12;">0 waiting</span></label>
+    <div id="pending"></div>
+    <div id="noPending" class="muted">No one is waiting to join.</div>
+
+    <label style="margin-top:16px;">Watching now <span id="apprCount" class="pill">0</span></label>
+    <div id="approved"></div>
+    <div id="noApproved" class="muted">No viewers yet.</div>
+  </div>
+</main>
+
+<script>
+const CURRENT = "{{current}}";
+const player = document.getElementById('player');
+const videoSelect = document.getElementById('videoSelect');
+const speedSelect = document.getElementById('speedSelect');
+const subSelect = document.getElementById('subSelect');
+const audioSelect = document.getElementById('audioSelect');
+const statusEl = document.getElementById('status');
+const connEl = document.getElementById('conn');
+const viewersEl = document.getElementById('viewers');
+
+let suppress = false;            // when true, don't echo events back to server
+let ws;
+
+function send(obj) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+// ---- WebSocket: receive shared state (keeps multiple admins in agreement) ---
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { connEl.textContent = 'live'; connEl.classList.add('live'); };
+  ws.onclose = (ev) => {
+    connEl.classList.remove('live');
+    if (ev.code === 4401) {            // server rejected us: not signed in
+      connEl.textContent = 'signed out';
+      location.href = '/login';
+      return;
+    }
+    connEl.textContent = 'reconnecting…';
+    setTimeout(connect, 1000);
+  };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'guests') { renderGuests(m); return; }
+    if (m.type === 'state') applyState(m);
+  };
+}
+
+// ---- access requests + watching list ----
+function guestAction(action, gid) { send({ action, gid }); }
+
+function renderGuests(m) {
+  viewersEl.textContent = `👁 ${m.approved} watching`;
+  document.getElementById('apprCount').textContent = m.approved;
+  const pc = document.getElementById('pendCount');
+  pc.textContent = `${m.pending} waiting`;
+  pc.style.background = m.pending ? '#5a4410' : '#3a2e12';
+
+  const pending = m.guests.filter(g => g.status === 'pending');
+  const approved = m.guests.filter(g => g.status === 'approved');
+
+  const pendBox = document.getElementById('pending');
+  const apprBox = document.getElementById('approved');
+  document.getElementById('noPending').style.display = pending.length ? 'none' : '';
+  document.getElementById('noApproved').style.display = approved.length ? 'none' : '';
+
+  pendBox.innerHTML = pending.map(g => `
+    <div class="guest">
+      <span class="nm">🙋 <b>${esc(g.name)}</b> <span class="when">wants to join</span></span>
+      <button class="approve" onclick="guestAction('approve','${g.gid}')">Approve</button>
+      <button class="deny" onclick="guestAction('deny','${g.gid}')">Deny</button>
+    </div>`).join('');
+
+  apprBox.innerHTML = approved.map(g => `
+    <div class="guest">
+      <span class="nm">👤 ${esc(g.name)}</span>
+      <button class="kick" onclick="guestAction('kick','${g.gid}')">Remove</button>
+    </div>`).join('');
+}
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function applyState(s) {
+  suppress = true;
+  if (s.filename && currentFile() !== s.filename) loadFile(s.filename, false);
+  if (s.filename) {
+    const target = s.position + (s.is_playing ? (Date.now()/1000 - s.server_time) * s.rate : 0);
+    if (Math.abs(player.currentTime - target) > 0.6) player.currentTime = target;
+    if (Math.abs(player.playbackRate - s.rate) > 0.01) player.playbackRate = s.rate;
+    speedSelect.value = String(s.rate);
+    if (s.is_playing && player.paused) player.play().catch(()=>{});
+    if (!s.is_playing && !player.paused) player.pause();
+  }
+  setTimeout(() => suppress = false, 50);
+}
+
+function currentFile() {
+  const src = player.getAttribute('data-file');
+  return src || "";
+}
+
+function loadFile(name, broadcast = true) {
+  player.setAttribute('data-file', name);
+  player.src = `/video/${encodeURIComponent(name)}`;
+  videoSelect.value = name;
+  statusEl.textContent = `Loaded: ${name}`;
+  player.load();
+  if (broadcast) send({ action: 'load', filename: name });
+}
+
+// ---- populate video list ----
+async function refreshVideos(selectName) {
+  const r = await fetch('/videos'); const d = await r.json();
+  videoSelect.innerHTML = '';
+  if (!d.videos.length) {
+    const o = document.createElement('option'); o.textContent = '— no videos uploaded yet —'; o.value='';
+    videoSelect.appendChild(o);
+  }
+  for (const v of d.videos) {
+    const o = document.createElement('option'); o.value = v; o.textContent = v;
+    videoSelect.appendChild(o);
+  }
+  const pick = selectName || d.current;
+  if (pick) loadFile(pick, false);
+}
+
+videoSelect.onchange = () => { if (videoSelect.value) loadFile(videoSelect.value, true); };
+
+// ---- upload ----
+document.getElementById('uploadBtn').onclick = async () => {
+  const f = document.getElementById('fileInput').files[0];
+  const st = document.getElementById('uploadStatus');
+  if (!f) { st.textContent = 'Choose a file first.'; return; }
+  st.textContent = `Uploading ${f.name}…`;
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/upload', { method: 'POST', body: fd });
+  const d = await r.json();
+  if (!r.ok) { st.textContent = '❌ ' + (d.error || 'Upload failed'); return; }
+  st.textContent = `✅ Uploaded ${d.filename}`;
+  await refreshVideos(d.filename);
+};
+
+// ---- admin controls -> broadcast ----
+player.addEventListener('play',  () => { if (!suppress) send({ action: 'play',  position: player.currentTime }); });
+player.addEventListener('pause', () => { if (!suppress) send({ action: 'pause', position: player.currentTime }); });
+player.addEventListener('seeked',() => { if (!suppress) send({ action: 'seek',  position: player.currentTime }); });
+player.addEventListener('ratechange', () => {
+  if (!suppress) { speedSelect.value = String(player.playbackRate); send({ action: 'rate', rate: player.playbackRate }); }
+});
+
+speedSelect.onchange = () => { player.playbackRate = parseFloat(speedSelect.value); };
+
+// subtitles (text tracks embedded in the file, best-effort)
+player.addEventListener('loadedmetadata', () => {
+  // text tracks
+  subSelect.innerHTML = '<option value="">Off</option>';
+  Array.from(player.textTracks).forEach((t, i) => {
+    t.mode = 'disabled';
+    const o = document.createElement('option');
+    o.value = String(i); o.textContent = t.label || t.language || `Track ${i+1}`;
+    subSelect.appendChild(o);
+  });
+  // audio tracks (limited browser support)
+  audioSelect.innerHTML = '<option value="">Default</option>';
+  const at = player.audioTracks;
+  if (at) Array.from(at).forEach((t, i) => {
+    const o = document.createElement('option');
+    o.value = String(i); o.textContent = t.label || t.language || `Audio ${i+1}`;
+    audioSelect.appendChild(o);
+  });
+});
+
+subSelect.onchange = () => {
+  Array.from(player.textTracks).forEach((t, i) => {
+    t.mode = (String(i) === subSelect.value) ? 'showing' : 'disabled';
+  });
+  send({ action: 'subtitle', subtitle: subSelect.value });
+};
+audioSelect.onchange = () => {
+  const at = player.audioTracks;
+  if (at) Array.from(at).forEach((t, i) => { t.enabled = (String(i) === audioSelect.value); });
+  send({ action: 'audio_track', audio_track: audioSelect.value });
+};
+
+// heartbeat: correct viewer drift every 3s
+setInterval(() => {
+  if (player.src && !suppress) send({ action: 'sync', position: player.currentTime, is_playing: !player.paused });
+}, 3000);
+
+// ---- share link buttons ----
+document.getElementById('copyBtn').onclick = () => {
+  navigator.clipboard.writeText(document.getElementById('viewerUrl').value);
+  document.getElementById('copyBtn').textContent = 'Copied!';
+  setTimeout(() => document.getElementById('copyBtn').textContent = 'Copy', 1500);
+};
+document.getElementById('openBtn').onclick = () => window.open(document.getElementById('viewerUrl').value, '_blank');
+
+connect();
+refreshVideos(CURRENT || null);
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+[project]
+name = "moviehouse"
+version = "0.1.0"
+description = "Synced watch-party video server: admin uploads & controls, viewers watch in sync"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+]

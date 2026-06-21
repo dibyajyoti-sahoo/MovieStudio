@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MovieHouse — Live</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: #e8e8ea;
+       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  .wrap { height: 100%; display: flex; flex-direction: column; }
+  .bar { padding: 10px 16px; background: #0c0d11; display: flex; gap: 10px;
+         align-items: center; border-bottom: 1px solid #1c1e26; }
+  .bar h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #555; }
+  .dot.live { background: #2ecc71; box-shadow: 0 0 8px #2ecc71; }
+  .tag { font-size: 12px; color: #8b8f9c; }
+  .stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; }
+  video { max-width: 100%; max-height: 100%; background: #000; pointer-events: none; }
+  .overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
+       align-items: center; justify-content: center; gap: 16px; background: rgba(0,0,0,.9);
+       text-align: center; padding: 24px; }
+  .overlay.hidden { display: none; }
+  .overlay h2 { margin: 0; font-size: 22px; }
+  .overlay p { margin: 0; color: #a9adba; max-width: 440px; }
+  .card { width: 340px; max-width: 90vw; display: flex; flex-direction: column; gap: 12px; }
+  input { width: 100%; padding: 12px; background: #14151b; color: #e8e8ea;
+       border: 1px solid #2c2f3a; border-radius: 10px; font-size: 15px; text-align: center; }
+  button { background: #2a6df4; color: #fff; border: 0; padding: 13px 22px;
+       border-radius: 11px; font-size: 16px; cursor: pointer; }
+  button:hover { filter: brightness(1.08); }
+  .spinner { width: 34px; height: 34px; border: 3px solid #2c2f3a; border-top-color: #2a6df4;
+       border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .denied h2 { color: #f3a9b2; }
+  .screen { display: none; flex-direction: column; align-items: center; gap: 16px; }
+  .screen.show { display: flex; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <span class="dot" id="dot"></span>
+    <h1>🎬 MovieHouse</h1>
+    <span class="tag" id="tag">connecting…</span>
+  </div>
+  <div class="stage">
+    <video id="player" playsinline></video>
+
+    <div class="overlay" id="overlay">
+      <!-- 1. enter name -->
+      <div class="screen show" id="s-name">
+        <h2>Join the watch party</h2>
+        <p>Enter your name and ask the host to let you in.</p>
+        <div class="card">
+          <input id="nameInput" placeholder="Your name" maxlength="40" autofocus>
+          <button id="knockBtn">Request access</button>
+        </div>
+      </div>
+
+      <!-- 2. waiting for approval -->
+      <div class="screen" id="s-wait">
+        <div class="spinner"></div>
+        <h2>Waiting for the host…</h2>
+        <p id="waitName">Your request has been sent. Hang tight.</p>
+      </div>
+
+      <!-- 3. approved, click to start (user gesture for sound) -->
+      <div class="screen" id="s-start">
+        <h2>You're in! 🎉</h2>
+        <p>The host let you in. Tap to start watching with sound — you'll sync automatically.</p>
+        <button id="startBtn">▶ Start watching</button>
+      </div>
+
+      <!-- 4. denied / kicked -->
+      <div class="screen denied" id="s-denied">
+        <h2 id="deniedTitle">Request denied</h2>
+        <p id="deniedMsg">The host didn't let you in.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const player = document.getElementById('player');
+const dot = document.getElementById('dot');
+const tag = document.getElementById('tag');
+
+let ws, myName = "", approved = false, started = false, finished = false, lastState = null;
+
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('show'));
+  document.getElementById(id).classList.add('show');
+  document.getElementById('overlay').classList.remove('hidden');
+}
+function hideOverlay() { document.getElementById('overlay').classList.add('hidden'); }
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => {
+    dot.classList.add('live'); tag.textContent = 'connected';
+    if (myName && !finished) knock();   // re-knock after a reconnect
+  };
+  ws.onclose = () => {
+    dot.classList.remove('live');
+    if (!finished) { tag.textContent = 'reconnecting…'; setTimeout(connect, 1000); }
+  };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'pending')  { tag.textContent = 'waiting for host'; show('s-wait'); }
+    else if (m.type === 'approved') { approved = true; tag.textContent = 'approved'; if (!started) show('s-start'); }
+    else if (m.type === 'state')    { lastState = m; if (started) applyState(m); }
+    else if (m.type === 'denied')   { finished = true; deniedScreen('Request denied', 'The host didn’t let you in.'); }
+    else if (m.type === 'kicked')   { finished = true; deniedScreen('Removed', 'The host removed you from the room.'); }
+  };
+}
+
+function knock() {
+  ws.send(JSON.stringify({ type: 'knock', name: myName }));
+  document.getElementById('waitName').textContent = `Sent as "${myName}". Waiting for the host to approve…`;
+  show('s-wait');
+}
+
+function deniedScreen(title, msg) {
+  document.getElementById('deniedTitle').textContent = title;
+  document.getElementById('deniedMsg').textContent = msg;
+  try { player.pause(); } catch(e) {}
+  show('s-denied');
+  tag.textContent = 'no access';
+}
+
+document.getElementById('knockBtn').onclick = () => {
+  const v = document.getElementById('nameInput').value.trim();
+  if (!v) { document.getElementById('nameInput').focus(); return; }
+  myName = v;
+  knock();
+};
+document.getElementById('nameInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('knockBtn').click();
+});
+
+document.getElementById('startBtn').onclick = () => {
+  started = true;
+  player.muted = false;
+  hideOverlay();
+  if (lastState) applyState(lastState);
+  player.play().catch(()=>{});
+};
+
+function applyState(s) {
+  if (!s.filename) { tag.textContent = 'waiting for host to load a video…'; return; }
+  if (player.getAttribute('data-file') !== s.filename) {
+    player.setAttribute('data-file', s.filename);
+    player.src = `/video/${encodeURIComponent(s.filename)}`;
+    player.load();
+  }
+  const target = s.position + (s.is_playing ? (Date.now()/1000 - s.server_time) * s.rate : 0);
+  if (Math.abs(player.currentTime - target) > 0.5) player.currentTime = Math.max(0, target);
+  if (Math.abs(player.playbackRate - s.rate) > 0.01) player.playbackRate = s.rate;
+
+  Array.from(player.textTracks).forEach((t, i) => {
+    t.mode = (s.subtitle !== null && s.subtitle !== '' && String(i) === String(s.subtitle)) ? 'showing' : 'disabled';
+  });
+  const at = player.audioTracks;
+  if (at && s.audio_track !== null && s.audio_track !== '') {
+    Array.from(at).forEach((t, i) => { t.enabled = String(i) === String(s.audio_track); });
+  }
+
+  if (s.is_playing && player.paused) player.play().catch(()=>{});
+  if (!s.is_playing && !player.paused) player.pause();
+  tag.textContent = s.is_playing ? `playing · ${s.rate}×` : 'paused by host';
+}
+
+document.addEventListener('keydown', (e) => {
+  if ([' ', 'k', 'ArrowLeft', 'ArrowRight', 'f'].includes(e.key)) e.preventDefault();
+});
+setInterval(() => { if (started && lastState) applyState(lastState); }, 2500);
+
+connect();
+</script>
+</body>
+</html>
