@@ -1,0 +1,28 @@
+services:
+  moviehouse:
+    build: .
+    image: moviehouse:latest
+    container_name: moviehouse
+    restart: unless-stopped
+    ports:
+      - "10457:10457"   # admin  (you sign in here)
+      - "10458:10458"   # viewer (share this one)
+    environment:
+      MH_HOST: "0.0.0.0"
+      MH_ADMIN_PORT: "10457"
+      MH_VIEWER_PORT: "10458"
+      # The host/IP viewers use in the shared link. Set this to the machine's
+      # LAN IP or public hostname, otherwise the printed link uses the request
+      # host (usually fine). Example: "192.168.1.92" or "watch.example.com".
+      MH_PUBLIC_HOST: "${MH_PUBLIC_HOST:-}"
+      # Your SSO auth server (admin login calls <base>/auth/signin).
+      MH_SSO_BASE_URL: "${MH_SSO_BASE_URL:-https://secure.dibyajyoti.dpdns.org}"
+      # Optional comma-separated admin email allowlist (empty = allow any).
+      MH_ADMIN_EMAILS: "${MH_ADMIN_EMAILS:-}"
+      # Admin session lifetime in seconds (default 12h).
+      MH_SESSION_TTL: "${MH_SESSION_TTL:-43200}"
+    volumes:
+      - moviehouse_uploads:/app/uploads
+
+volumes:
+  moviehouse_uploads:
