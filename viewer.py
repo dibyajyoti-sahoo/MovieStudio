@@ -8,10 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from hub import hub
-from media import serve_video
+from media import serve_video, intro_file
 
 app = FastAPI(title="MovieHouse Viewer")
 TEMPLATES = Path(__file__).parent / "templates"
@@ -21,6 +21,15 @@ TEMPLATES = Path(__file__).parent / "templates"
 async def index():
     html = (TEMPLATES / "viewer.html").read_text(encoding="utf-8")
     return HTMLResponse(html)
+
+
+@app.get("/intro")
+async def intro(request: Request):
+    """The looping lobby video shown until the host starts a movie."""
+    p = intro_file()
+    if p is None:
+        return Response(status_code=404)
+    return serve_video(p.name, request)
 
 
 @app.get("/video/{filename:path}")

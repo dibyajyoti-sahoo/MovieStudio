@@ -51,6 +51,39 @@
   .bar-fill.indet { width: 35% !important; animation: slide 1.1s ease-in-out infinite; }
   @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
   .progress-label { font-size: 13px; color: #a9adba; margin-top: 6px; }
+  .video-wrap { position: relative; }
+  #startShowBtn { background: linear-gradient(90deg,#2a6df4,#1e7a3c); margin-top: 8px; width: 100%; font-weight: 600; }
+  /* cinematic ring countdown (shared look with viewer) */
+  .countdown { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+        border-radius: 10px; background: radial-gradient(circle at center, rgba(8,10,18,.86), #000 82%); }
+  .countdown.show { display: flex; }
+  .cd-stage { position: relative; display: flex; align-items: center; justify-content: center; }
+  .cd-ring { width: min(42vmin, 240px); height: min(42vmin, 240px); transform: rotate(-90deg); display: block; }
+  .cd-track { fill: none; stroke: rgba(255,255,255,.08); stroke-width: 6; }
+  .cd-prog { fill: none; stroke: #3b82f6; stroke-width: 9; stroke-linecap: round;
+        stroke-dasharray: 754; stroke-dashoffset: 0; filter: drop-shadow(0 0 12px rgba(59,130,246,.85));
+        animation: cd-sweep 1s linear forwards; }
+  @keyframes cd-sweep { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 754; } }
+  .cd-number { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        font-size: clamp(54px,14vw,120px); font-weight: 800; color: #fff;
+        text-shadow: 0 0 26px rgba(59,130,246,.9), 0 0 60px rgba(111,210,138,.5);
+        animation: cd-pop .85s cubic-bezier(.2,.8,.2,1); }
+  .cd-welcome { font-size: clamp(20px,5vw,40px); font-weight: 800; text-align: center; padding: 0 16px;
+        background: linear-gradient(90deg,#2a6df4,#6fd28a); -webkit-background-clip: text; background-clip: text;
+        color: transparent; animation: cd-pop .85s cubic-bezier(.2,.8,.2,1); }
+  @keyframes cd-pop { 0% { transform: scale(2.2); opacity: 0; filter: blur(6px); }
+        60% { opacity: 1; filter: blur(0); } 100% { transform: scale(1); } }
+  /* intermission overlay */
+  .intermission { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center;
+        justify-content: center; gap: 10px; border-radius: 10px; text-align: center; padding: 18px;
+        background: radial-gradient(circle at 50% 30%, #1a1030, #000 80%); }
+  .intermission.show { display: flex; }
+  .intermission .imtitle { font-size: clamp(22px,7vw,52px); font-weight: 900; letter-spacing: 3px;
+        background: linear-gradient(90deg,#f5b301,#ff5e8a,#2a6df4); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .intermission .imtimer { font-size: clamp(36px,11vw,92px); font-weight: 800; color: #fff; font-variant-numeric: tabular-nums;
+        text-shadow: 0 0 26px rgba(245,179,1,.5); }
+  .intermission .imsub { color: #c7c2d8; font-size: clamp(12px,3vw,16px); }
+  .im-min { flex: 0 0 auto; }
 </style>
 </head>
 <body>
@@ -94,8 +127,29 @@
   <div class="card">
     <label>Now playing</label>
     <select id="videoSelect"></select>
-    <video id="player" controls playsinline></video>
+    <button id="startShowBtn">▶ Start show (3·2·1 countdown for everyone)</button>
+    <div class="video-wrap">
+      <video id="player" controls playsinline></video>
+      <div class="countdown" id="countdown"></div>
+      <div class="intermission" id="intermission"></div>
+    </div>
     <div id="status">No video loaded.</div>
+
+    <label style="margin-top:14px;">Interval / Break</label>
+    <div class="row" id="intervalSetup">
+      <button class="secondary im-min" data-min="4">4 min</button>
+      <button class="secondary im-min" data-min="5">5 min</button>
+      <button class="secondary im-min" data-min="6">6 min</button>
+      <input type="number" id="imCustom" min="1" max="180" placeholder="custom min"
+             style="flex:1; min-width:110px; padding:9px; background:#0e0f13; color:#e8e8ea;
+                    border:1px solid #2c2f3a; border-radius:8px; font-size:14px;">
+      <button id="imStartBtn" style="flex:0 0 auto;">Start interval</button>
+    </div>
+    <div class="row" id="intervalLive" style="display:none;">
+      <span class="pill" id="imCountLabel" style="background:#3a2e12;">Break: 0:00</span>
+      <button id="imExtendBtn" class="secondary" style="flex:0 0 auto;">+1 min</button>
+      <button id="imResumeBtn" style="flex:0 0 auto; background:#1e7a3c;">Resume now</button>
+    </div>
 
     <div class="row" style="margin-top:12px;">
       <div>
@@ -226,6 +280,117 @@ function esc(s) { return String(s).replace(/[&<>"']/g, c =>
 
 // The admin's own player is the source of truth — no remote state to apply.
 let suppress = false;
+// Until we've restored the live position on (re)load, don't broadcast — a fresh
+// tab sits at position 0 and would otherwise reset every viewer to the start.
+let ready = false;
+// True while a 3·2·1 countdown is running (suppresses the sync heartbeat).
+let counting = false;
+
+// ---- pre-movie countdown (cinematic ring: 3 · 2 · 1 · Welcome) ----
+function cdMarkup(token) {
+  if (token === 'welcome') return `<div class="cd-welcome">Welcome to DJ's MovieHouse</div>`;
+  return `<div class="cd-stage">
+    <svg class="cd-ring" viewBox="0 0 260 260">
+      <circle class="cd-track" cx="130" cy="130" r="120"></circle>
+      <circle class="cd-prog" cx="130" cy="130" r="120"></circle>
+    </svg>
+    <div class="cd-number">${token}</div>
+  </div>`;
+}
+function runCountdown(onDone) {
+  counting = true;
+  const el = document.getElementById('countdown');
+  el.classList.add('show');
+  el.innerHTML = cdMarkup('3');
+  let n = 3;
+  const iv = setInterval(() => {
+    n--;
+    if (n >= 1) { el.innerHTML = cdMarkup(String(n)); }
+    else {
+      clearInterval(iv);
+      el.innerHTML = cdMarkup('welcome');
+      setTimeout(() => {
+        el.classList.remove('show'); el.innerHTML = '';
+        counting = false; onDone && onDone();
+      }, 1100);
+    }
+  }, 1000);
+}
+
+// ---- interval / intermission ----
+let imTimer = null, imEnd = 0;
+function fmtClock(t) {
+  t = Math.max(0, Math.round(t));
+  const m = Math.floor(t / 60), s = t % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+function imMarkup(remaining) {
+  const done = remaining <= 0;
+  return `<div class="imtitle">INTERMISSION</div>
+    <div class="imtimer">${fmtClock(remaining)}</div>
+    <div class="imsub">${done ? 'Resuming the movie…' : 'Grab some popcorn 🍿 — back shortly'}</div>`;
+}
+function startInterval(mins) {
+  if (!mins || mins <= 0) { statusEl.textContent = 'Pick a break length first.'; return; }
+  const secs = Math.round(mins * 60);
+  imEnd = Date.now() + secs * 1000;
+  send({ action: 'interval_start', secs });
+  try { player.pause(); } catch (e) {}
+  document.getElementById('intermission').classList.add('show');
+  document.getElementById('intervalSetup').style.display = 'none';
+  document.getElementById('intervalLive').style.display = 'flex';
+  if (imTimer) clearInterval(imTimer);
+  imTimer = setInterval(imTick, 250); imTick();
+}
+function imTick() {
+  const remaining = (imEnd - Date.now()) / 1000;
+  document.getElementById('intermission').innerHTML = imMarkup(remaining);
+  document.getElementById('imCountLabel').textContent = 'Break: ' + fmtClock(remaining);
+  if (remaining <= 0) resumeInterval();
+}
+function extendInterval() { imEnd += 60000; send({ action: 'interval_extend', secs: 60 }); imTick(); }
+function resumeInterval() {
+  if (imTimer) { clearInterval(imTimer); imTimer = null; }
+  document.getElementById('intermission').classList.remove('show');
+  document.getElementById('intervalSetup').style.display = 'flex';
+  document.getElementById('intervalLive').style.display = 'none';
+  send({ action: 'interval_resume', position: player.currentTime });
+  player.play().catch(() => {});
+}
+
+// Pick a movie -> tell everyone to start the show -> countdown -> play together.
+function startShow(name) {
+  if (!name) { statusEl.textContent = 'Choose a video first.'; return; }
+  loadFile(name, false);                       // load locally, no broadcast
+  send({ action: 'start_show', filename: name });
+  runCountdown(() => { player.play().catch(() => {}); });
+}
+
+// On (re)load, pull the shared snapshot and resume the player from the live
+// position so reopening the admin tab doesn't restart the movie for everyone.
+async function restoreState() {
+  try {
+    const r = await fetch('/now');
+    if (r.status === 401) { location.href = '/login'; return; }
+    const s = await r.json();
+    if (s && s.filename) {
+      if (player.getAttribute('data-file') !== s.filename) loadFile(s.filename, false);
+      const apply = () => {
+        const target = s.position + (s.is_playing ? (Date.now()/1000 - s.server_time) * (s.rate||1) : 0);
+        suppress = true;
+        try { player.currentTime = Math.max(0, target); } catch (e) {}
+        player.playbackRate = s.rate || 1;
+        speedSelect.value = String(s.rate || 1);
+        if (s.is_playing) player.play().catch(()=>{});
+        statusEl.textContent = `Resumed at ${Math.floor(target)}s`;
+        setTimeout(() => { suppress = false; }, 400);
+      };
+      if (player.readyState >= 1) apply();
+      else player.addEventListener('loadedmetadata', apply, { once: true });
+    }
+  } catch (e) {}
+  ready = true;
+}
 
 // Build a /video URL that keeps the month "/" separators but encodes each segment.
 function videoUrl(p) {
@@ -265,7 +430,18 @@ async function refreshVideos(selectName) {
   if (pick) loadFile(pick, false);
 }
 
-videoSelect.onchange = () => { if (videoSelect.value) loadFile(videoSelect.value, true); };
+videoSelect.onchange = () => startShow(videoSelect.value);
+document.getElementById('startShowBtn').onclick = () => startShow(videoSelect.value);
+
+// interval buttons
+document.querySelectorAll('.im-min').forEach(b =>
+  b.onclick = () => startInterval(parseInt(b.dataset.min, 10)));
+document.getElementById('imStartBtn').onclick = () => {
+  const v = parseFloat(document.getElementById('imCustom').value);
+  startInterval(v || 5);
+};
+document.getElementById('imExtendBtn').onclick = extendInterval;
+document.getElementById('imResumeBtn').onclick = resumeInterval;
 
 // ---- progress bar helpers ----
 const progWrap = document.getElementById('progWrap');
@@ -283,6 +459,30 @@ function fmtBytes(n) {
   const u = ['B','KB','MB','GB','TB']; let i = 0;
   while (n >= 1024 && i < u.length-1) { n /= 1024; i++; }
   return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+}
+
+// ---- watch a background MP4 conversion ----
+function pollTranscode(jobId) {
+  const st = document.getElementById('uploadStatus');
+  showProg('Converting to MP4 so everyone can play it…', 0);
+  const tick = setInterval(async () => {
+    let p;
+    try {
+      const r = await fetch('/transcode_progress/' + jobId);
+      if (r.status === 401) { location.href = '/login'; return; }
+      p = await r.json();
+    } catch (e) { return; }
+    if (p.status === 'error') {
+      clearInterval(tick); hideProg();
+      st.textContent = '❌ ' + (p.error || 'Conversion failed.'); return;
+    }
+    if (p.status === 'done') {
+      clearInterval(tick); hideProg();
+      st.textContent = `✅ Ready: ${p.filename || ''}`;
+      await refreshVideos(p.rel); return;
+    }
+    showProg(`Converting to MP4… ${Math.round(p.percent || 0)}%`, p.percent || 0);
+  }, 900);
 }
 
 // ---- file upload (real-time progress via XHR) ----
@@ -304,8 +504,9 @@ document.getElementById('uploadBtn').onclick = () => {
   xhr.onload = async () => {
     if (xhr.status === 401) { location.href = '/login'; return; }
     let d = {}; try { d = JSON.parse(xhr.responseText); } catch (e) {}
+    if (xhr.status < 200 || xhr.status >= 300) { hideProg(); st.textContent = '❌ ' + (d.error || 'Upload failed'); return; }
+    if (d.ready === false && d.transcode_job) { pollTranscode(d.transcode_job); return; }
     hideProg();
-    if (xhr.status < 200 || xhr.status >= 300) { st.textContent = '❌ ' + (d.error || 'Upload failed'); return; }
     st.textContent = `✅ Uploaded ${d.filename.split('/').pop()}`;
     await refreshVideos(d.filename);
   };
@@ -341,7 +542,9 @@ document.getElementById('driveBtn').onclick = async () => {
       clearInterval(tick); hideProg(); st.textContent = '❌ ' + (p.error || 'Download failed.'); return;
     }
     if (p.status === 'done') {
-      clearInterval(tick); hideProg(); inp.value = '';
+      clearInterval(tick); inp.value = '';
+      if (p.transcode_job) { pollTranscode(p.transcode_job); return; }
+      hideProg();
       st.textContent = `✅ Imported ${(p.filename || '')}`;
       await refreshVideos(p.rel);
       return;
@@ -398,9 +601,9 @@ audioSelect.onchange = () => {
   send({ action: 'audio_track', audio_track: audioSelect.value });
 };
 
-// heartbeat: correct viewer drift every 3s
+// heartbeat: correct viewer drift every 3s (only once we've restored state)
 setInterval(() => {
-  if (player.src && !suppress) send({ action: 'sync', position: player.currentTime, is_playing: !player.paused });
+  if (ready && !counting && player.src && !suppress) send({ action: 'sync', position: player.currentTime, is_playing: !player.paused });
 }, 3000);
 
 // ---- share link buttons ----
@@ -413,7 +616,7 @@ document.getElementById('openBtn').onclick = () => window.open(document.getEleme
 
 pollGuests();
 setInterval(pollGuests, 2000);
-refreshVideos(CURRENT || null);
+refreshVideos(CURRENT || null).then(restoreState);
 </script>
 </body>
 </html>

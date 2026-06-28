@@ -11,13 +11,14 @@ import shutil
 from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 import config
 import auth
 import drive
+import transcode
 from hub import hub, UPLOAD_DIR, month_dir, month_label, unique_dest
-from media import serve_video
+from media import serve_video, intro_file
 
 app = FastAPI(title="MovieHouse Admin")
 TEMPLATES = Path(__file__).parent / "templates"
@@ -37,19 +38,38 @@ ALLOWED_EXT = BROWSER_EXT | {
 }
 
 
-# Drive jobs already pushed into shared playback state (avoid re-loading).
+# Jobs already pushed into shared playback state (avoid re-loading every poll).
 _drive_loaded: set[str] = set()
+_tc_loaded: set[str] = set()
+# drive job_id -> transcode job_id, so a downloaded non-browser file is
+# converted exactly once.
+_drive_transcode: dict[str, str] = {}
+
+
+def _maybe_transcode(src: Path) -> str | None:
+    """If `src` isn't browser-playable, move it into an originals/ subfolder and
+    start converting it to MP4. Returns the transcode job id, else None."""
+    if src.suffix.lower() in BROWSER_EXT:
+        return None
+    orig_dir = src.parent / "originals"
+    orig_dir.mkdir(exist_ok=True)
+    orig = unique_dest(orig_dir, src.name)
+    shutil.move(str(src), str(orig))
+    return transcode.start(orig, src.parent)
 
 
 def _list_groups() -> dict:
     """Walk uploads/ recursively and group videos by their month folder
-    (newest month first). Loose files at the root fall under 'Other'."""
+    (newest month first). Loose files at the root fall under 'Other'.
+    Kept originals (under originals/) are hidden — only playable files show."""
     base = UPLOAD_DIR.resolve()
     groups: dict[str, list] = {}
     for p in base.rglob("*"):
         if not p.is_file() or p.suffix.lower() not in ALLOWED_EXT:
             continue
         rel = p.relative_to(base)
+        if "originals" in rel.parts or p.name.lower().startswith("intro."):
+            continue
         month = rel.parts[0] if len(rel.parts) > 1 else ""
         groups.setdefault(month, []).append(
             {"path": rel.as_posix(), "name": p.name, "month": month})
@@ -139,9 +159,14 @@ async def upload(request: Request, file: UploadFile = File(...)):
     dest = unique_dest(month_dir(), Path(file.filename).name)
     with dest.open("wb") as out:
         shutil.copyfileobj(file.file, out)
+    # Non-browser formats (.mkv, .avi, …) get converted to MP4 so every viewer
+    # can play them; the client polls /transcode_progress and loads the result.
+    tc = _maybe_transcode(dest)
+    if tc:
+        return {"filename": dest.name, "ready": False, "transcode_job": tc}
     rel = dest.relative_to(UPLOAD_DIR).as_posix()
     hub.apply_admin_event({"action": "load", "filename": rel})
-    return {"filename": rel}
+    return {"filename": rel, "ready": True}
 
 
 @app.post("/upload_drive")
@@ -167,13 +192,37 @@ async def drive_progress(request: Request, job_id: str):
     job = drive.get_job(job_id)
     if not job:
         return JSONResponse({"error": "unknown job"}, status_code=404)
-    # On completion, hand the client the relative path and load it into shared
-    # playback state exactly once.
+    # On completion: browser-playable files load straight away; others kick off a
+    # one-time MP4 conversion and the client follows transcode_job instead.
+    if job.get("status") == "done" and job.get("path"):
+        src = Path(job["path"])
+        if src.suffix.lower() not in BROWSER_EXT:
+            tc = _drive_transcode.get(job_id)
+            if not tc and src.exists():
+                tc = _maybe_transcode(src)
+                _drive_transcode[job_id] = tc
+            job["transcode_job"] = tc
+        else:
+            rel = src.relative_to(UPLOAD_DIR).as_posix()
+            job["rel"] = rel
+            if job_id not in _drive_loaded:
+                _drive_loaded.add(job_id)
+                hub.apply_admin_event({"action": "load", "filename": rel})
+    return job
+
+
+@app.get("/transcode_progress/{job_id}")
+async def transcode_progress(request: Request, job_id: str):
+    if not _current_email(request):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    job = transcode.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": "unknown job"}, status_code=404)
     if job.get("status") == "done" and job.get("path"):
         rel = Path(job["path"]).relative_to(UPLOAD_DIR).as_posix()
         job["rel"] = rel
-        if job_id not in _drive_loaded:
-            _drive_loaded.add(job_id)
+        if job_id not in _tc_loaded:
+            _tc_loaded.add(job_id)
             hub.apply_admin_event({"action": "load", "filename": rel})
     return job
 
@@ -183,6 +232,16 @@ async def list_videos(request: Request):
     if not _current_email(request):
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     return _list_groups()
+
+
+@app.get("/intro")
+async def intro(request: Request):
+    if not _current_email(request):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    p = intro_file()
+    if p is None:
+        return Response(status_code=404)
+    return serve_video(p.name, request)
 
 
 @app.get("/video/{filename:path}")
@@ -203,6 +262,15 @@ async def control(request: Request):
     if not isinstance(event, dict):
         return JSONResponse({"error": "bad payload"}, status_code=400)
     return hub.apply_admin_event(event)
+
+
+@app.get("/now")
+async def now(request: Request):
+    """Current shared playback snapshot, so a reloaded admin tab can resume from
+    the live position instead of resetting everyone to the start."""
+    if not _current_email(request):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    return hub.state.snapshot()
 
 
 @app.get("/guests")

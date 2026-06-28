@@ -8,4 +8,5 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",
     "httpx>=0.27",
+    "imageio-ffmpeg>=0.4",
 ]

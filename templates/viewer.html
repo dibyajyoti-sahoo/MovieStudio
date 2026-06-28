@@ -18,6 +18,11 @@
   .tag { font-size: 12px; color: #8b8f9c; }
   .stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; }
   video { max-width: 100%; max-height: 100%; background: #000; pointer-events: none; }
+  .watermark { position: absolute; top: 10px; right: 12px; z-index: 8; pointer-events: none;
+       font-size: 12px; font-weight: 600; letter-spacing: .5px; opacity: .35;
+       color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.6); user-select: none;
+       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  .watermark b { color: #6fd28a; font-weight: 700; }
   .overlay { position: absolute; inset: 0; display: flex; flex-direction: column;
        align-items: center; justify-content: center; gap: 16px; background: rgba(0,0,0,.9);
        text-align: center; padding: 24px; }
@@ -36,6 +41,53 @@
   .denied h2 { color: #f3a9b2; }
   .screen { display: none; flex-direction: column; align-items: center; gap: 16px; }
   .screen.show { display: flex; }
+  .overlay { z-index: 20; }
+  /* lobby loop video + animated fallback */
+  #lobby { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+       background: #000; display: none; z-index: 5; }
+  #lobby.show { display: block; }
+  .lobbyFallback { position: absolute; inset: 0; display: none; flex-direction: column;
+       align-items: center; justify-content: center; gap: 14px; z-index: 5;
+       background: radial-gradient(circle at 30% 20%, #16243f, #000 72%); }
+  .lobbyFallback.show { display: flex; }
+  .lobbyFallback .reel { font-size: 52px; animation: spin2 4.5s linear infinite; }
+  .lobbyFallback .logo { font-size: clamp(28px,7vw,64px); font-weight: 800; letter-spacing: 1px;
+       background: linear-gradient(90deg,#2a6df4,#6fd28a); -webkit-background-clip: text;
+       background-clip: text; color: transparent; animation: glow 2.6s ease-in-out infinite; }
+  .lobbyFallback .sub { color: #9fb0c8; font-size: clamp(13px,3vw,18px); }
+  @keyframes spin2 { to { transform: rotate(360deg); } }
+  @keyframes glow { 0%,100% { filter: drop-shadow(0 0 8px rgba(42,109,244,.5)); }
+                    50% { filter: drop-shadow(0 0 26px rgba(111,210,138,.85)); } }
+  /* synced 3·2·1 countdown */
+  .vcountdown { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+       z-index: 12; background: radial-gradient(circle at center, rgba(8,10,18,.86), #000 82%); }
+  .vcountdown.show { display: flex; }
+  .cd-stage { position: relative; display: flex; align-items: center; justify-content: center; }
+  .cd-ring { width: min(58vmin,360px); height: min(58vmin,360px); transform: rotate(-90deg); display: block; }
+  .cd-track { fill: none; stroke: rgba(255,255,255,.08); stroke-width: 6; }
+  .cd-prog { fill: none; stroke: #3b82f6; stroke-width: 9; stroke-linecap: round;
+       stroke-dasharray: 754; stroke-dashoffset: 0; filter: drop-shadow(0 0 14px rgba(59,130,246,.9));
+       animation: cd-sweep 1s linear forwards; }
+  @keyframes cd-sweep { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 754; } }
+  .cd-number { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+       font-size: clamp(80px,24vw,200px); font-weight: 800; color: #fff;
+       text-shadow: 0 0 40px rgba(59,130,246,.9), 0 0 90px rgba(111,210,138,.5);
+       animation: cd-pop .85s cubic-bezier(.2,.8,.2,1); }
+  .cd-welcome { font-size: clamp(22px,7vw,56px); font-weight: 800; text-align: center; padding: 0 16px;
+       background: linear-gradient(90deg,#2a6df4,#6fd28a); -webkit-background-clip: text; background-clip: text;
+       color: transparent; animation: cd-pop .85s cubic-bezier(.2,.8,.2,1); }
+  @keyframes cd-pop { 0% { transform: scale(2.4); opacity: 0; filter: blur(8px); }
+       60% { opacity: 1; filter: blur(0); } 100% { transform: scale(1); } }
+  /* intermission */
+  .intermission { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center;
+       justify-content: center; gap: 14px; z-index: 14; text-align: center; padding: 24px;
+       background: radial-gradient(circle at 50% 30%, #1a1030, #000 80%); }
+  .intermission.show { display: flex; }
+  .intermission .imtitle { font-size: clamp(26px,8vw,72px); font-weight: 900; letter-spacing: 4px;
+       background: linear-gradient(90deg,#f5b301,#ff5e8a,#2a6df4); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .intermission .imtimer { font-size: clamp(48px,16vw,140px); font-weight: 800; color: #fff; line-height: 1;
+       font-variant-numeric: tabular-nums; text-shadow: 0 0 30px rgba(245,179,1,.5); }
+  .intermission .imsub { color: #c7c2d8; font-size: clamp(13px,3.4vw,18px); }
 </style>
 </head>
 <body>
@@ -47,6 +99,21 @@
   </div>
   <div class="stage">
     <video id="player" playsinline></video>
+    <div class="watermark">dj<b>House</b></div>
+
+    <!-- lobby: loops until the host starts a movie -->
+    <video id="lobby" playsinline loop></video>
+    <div class="lobbyFallback" id="lobbyFallback">
+      <div class="reel">🎬</div>
+      <div class="logo">DJ's MovieHouse</div>
+      <div class="sub">The show is about to begin — sit back and relax…</div>
+    </div>
+
+    <!-- synced pre-movie countdown -->
+    <div class="vcountdown" id="vcountdown"></div>
+
+    <!-- synced intermission / break -->
+    <div class="intermission" id="vintermission"></div>
 
     <div class="overlay" id="overlay">
       <!-- 1. enter name -->
@@ -95,6 +162,117 @@ function show(id) {
   document.getElementById('overlay').classList.remove('hidden');
 }
 function hideOverlay() { document.getElementById('overlay').classList.add('hidden'); }
+
+// ---- lobby + countdown ----
+const lobby = document.getElementById('lobby');
+const lobbyFallback = document.getElementById('lobbyFallback');
+const vcountdown = document.getElementById('vcountdown');
+const vintermission = document.getElementById('vintermission');
+let clockOffset = 0;                 // local_now - server_time
+let introOK = true;                  // becomes false if /intro is missing
+let cdTimer = null, cdToken = null;
+let imViewerTimer = null, imEndV = 0;
+
+function cdMarkup(token) {
+  if (token === 'welcome') return `<div class="cd-welcome">Welcome to DJ's MovieHouse</div>`;
+  return `<div class="cd-stage">
+    <svg class="cd-ring" viewBox="0 0 260 260">
+      <circle class="cd-track" cx="130" cy="130" r="120"></circle>
+      <circle class="cd-prog" cx="130" cy="130" r="120"></circle>
+    </svg>
+    <div class="cd-number">${token}</div>
+  </div>`;
+}
+function fmtClock(t) {
+  t = Math.max(0, Math.round(t));
+  const m = Math.floor(t / 60), s = t % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+function imMarkup(remaining) {
+  const done = remaining <= 0;
+  return `<div class="imtitle">INTERMISSION</div>
+    <div class="imtimer">${fmtClock(remaining)}</div>
+    <div class="imsub">${done ? 'Resuming the movie…' : 'Grab some popcorn 🍿 — back shortly'}</div>`;
+}
+
+lobby.src = '/intro';
+lobby.addEventListener('error', () => { introOK = false; });
+function nowServer() { return Date.now() / 1000 - clockOffset; }
+
+function showLobby() {
+  hideCountdownUI();
+  try { player.pause(); } catch (e) {}
+  if (introOK) {
+    lobby.classList.add('show'); lobbyFallback.classList.remove('show');
+    if (lobby.paused) lobby.play().catch(() => {});
+  } else {
+    lobbyFallback.classList.add('show'); lobby.classList.remove('show');
+  }
+  tag.textContent = 'lobby · waiting for the host';
+}
+function hideLobby() {
+  lobby.classList.remove('show'); lobbyFallback.classList.remove('show');
+  if (!lobby.paused) { try { lobby.pause(); } catch (e) {} }
+}
+function hideCountdownUI() { vcountdown.classList.remove('show'); }
+
+function phaseOf(s) {
+  if (s.interval_start) return 'interval';
+  const secs = s.countdown_secs || 4;
+  if (s.countdown_start) return (nowServer() < s.countdown_start + secs) ? 'countdown' : 'playing';
+  if (s.filename && (s.is_playing || s.position > 0.05)) return 'playing';
+  return 'lobby';
+}
+
+function runViewerCountdown(s) {
+  hideLobby(); hideIntermissionV();
+  ensureMovieLoaded(s);
+  try { player.pause(); } catch (e) {}
+  vcountdown.classList.add('show');
+  tag.textContent = 'starting…';
+  if (cdTimer) return;                // ticker already running
+  cdToken = null;
+  const secs = s.countdown_secs || 4;
+  const render = () => {
+    const remaining = s.countdown_start + secs - nowServer();
+    if (remaining <= 0) {
+      clearInterval(cdTimer); cdTimer = null; cdToken = null;
+      hideCountdownUI();
+      try { player.currentTime = 0; } catch (e) {}
+      player.play().catch(() => {});   // start immediately; state keeps us synced
+      return;
+    }
+    const token = remaining <= 1 ? 'welcome' : String(Math.max(1, Math.ceil(remaining) - 1));
+    if (token !== cdToken) { cdToken = token; vcountdown.innerHTML = cdMarkup(token); }
+  };
+  render();
+  cdTimer = setInterval(render, 100);
+}
+
+function runViewerInterval(s) {
+  hideLobby(); hideCountdownUI();
+  if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+  try { player.pause(); } catch (e) {}
+  vintermission.classList.add('show');
+  tag.textContent = 'intermission';
+  imEndV = s.interval_start + (s.interval_secs || 0);   // re-read each update (handles extend)
+  if (imViewerTimer) return;
+  const tick = () => { vintermission.innerHTML = imMarkup(imEndV - nowServer()); };
+  tick();
+  imViewerTimer = setInterval(tick, 250);
+}
+function hideIntermissionV() {
+  vintermission.classList.remove('show');
+  if (imViewerTimer) { clearInterval(imViewerTimer); imViewerTimer = null; }
+}
+
+function ensureMovieLoaded(s) {
+  if (s.filename && player.getAttribute('data-file') !== s.filename) {
+    player.setAttribute('data-file', s.filename);
+    player.src = '/video/' + String(s.filename).split('/').map(encodeURIComponent).join('/');
+    player.load();
+  }
+}
 
 // Request access, then start polling for state (no WebSocket).
 async function knock() {
@@ -154,18 +332,28 @@ document.getElementById('nameInput').addEventListener('keydown', e => {
 document.getElementById('startBtn').onclick = () => {
   started = true;
   player.muted = false;
+  lobby.muted = false;       // gesture obtained — intro can have sound
   hideOverlay();
   if (lastState) applyState(lastState);
-  player.play().catch(()=>{});
 };
 
+// Route each state update to the right phase: lobby loop, countdown, or movie.
 function applyState(s) {
-  if (!s.filename) { tag.textContent = 'waiting for host to load a video…'; return; }
-  if (player.getAttribute('data-file') !== s.filename) {
-    player.setAttribute('data-file', s.filename);
-    player.src = '/video/' + String(s.filename).split('/').map(encodeURIComponent).join('/');
-    player.load();
+  clockOffset = Date.now() / 1000 - s.server_time;
+  const phase = phaseOf(s);
+  if (phase === 'interval') { runViewerInterval(s); return; }
+  if (phase === 'lobby') {
+    if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+    hideIntermissionV(); showLobby(); return;
   }
+  if (phase === 'countdown') { runViewerCountdown(s); return; }
+  hideLobby(); hideCountdownUI(); hideIntermissionV();
+  if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+  playMovie(s);
+}
+
+function playMovie(s) {
+  ensureMovieLoaded(s);
   const target = s.position + (s.is_playing ? (Date.now()/1000 - s.server_time) * s.rate : 0);
   if (Math.abs(player.currentTime - target) > 0.5) player.currentTime = Math.max(0, target);
   if (Math.abs(player.playbackRate - s.rate) > 0.01) player.playbackRate = s.rate;

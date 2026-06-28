@@ -19,6 +19,9 @@ from pathlib import Path
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+# Length of the pre-movie countdown, in seconds (3 → 2 → 1 → "Welcome").
+COUNTDOWN_SECS = 4.0
+
 
 # --- month-wise storage helpers ---------------------------------------------
 def current_month() -> str:
@@ -67,6 +70,11 @@ class PlaybackState:
     last_update: float = field(default_factory=time.time)
     subtitle: str | None = None
     audio_track: str | None = None
+    # Server time at which the pre-movie countdown began (None = no countdown).
+    countdown_start: float | None = None
+    # Intermission/break: when it started and how long (seconds). None = no break.
+    interval_start: float | None = None
+    interval_secs: float = 0.0
 
     def live_position(self) -> float:
         if self.is_playing:
@@ -77,6 +85,7 @@ class PlaybackState:
         d = asdict(self)
         d["position"] = self.live_position()
         d["server_time"] = time.time()
+        d["countdown_secs"] = COUNTDOWN_SECS
         return d
 
 
@@ -109,14 +118,47 @@ class Hub:
             s.rate = 1.0
             s.subtitle = None
             s.audio_track = None
+            s.countdown_start = None
+            s.interval_start = None
+            s.interval_secs = 0.0
+        elif action == "start_show":
+            # Begin the synced countdown before a movie. Playback stays paused
+            # at the start until the countdown elapses and the admin plays.
+            s.filename = event.get("filename", s.filename)
+            s.position = 0.0
+            s.is_playing = False
+            s.rate = 1.0
+            s.subtitle = None
+            s.audio_track = None
+            s.countdown_start = time.time()
+            s.interval_start = None
+            s.interval_secs = 0.0
+        elif action == "interval_start":
+            # Pause for an intermission and start the break timer.
+            s.position = s.live_position()
+            s.is_playing = False
+            s.interval_start = time.time()
+            s.interval_secs = max(1.0, float(event.get("secs", 300)))
+        elif action == "interval_extend":
+            if s.interval_start is not None:
+                s.interval_secs += max(1.0, float(event.get("secs", 60)))
+        elif action == "interval_resume":
+            s.interval_start = None
+            s.interval_secs = 0.0
+            s.position = float(event.get("position", s.position))
+            s.is_playing = True
         elif action == "play":
             s.position = float(event.get("position", s.live_position()))
             s.is_playing = True
+            s.countdown_start = None
+            s.interval_start = None
+            s.interval_secs = 0.0
         elif action == "pause":
             s.position = float(event.get("position", s.live_position()))
             s.is_playing = False
         elif action == "seek":
             s.position = float(event.get("position", 0.0))
+            s.countdown_start = None
         elif action == "rate":
             s.position = s.live_position()
             s.rate = float(event.get("rate", 1.0))
