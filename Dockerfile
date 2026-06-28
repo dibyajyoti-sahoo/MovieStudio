@@ -18,7 +18,7 @@ RUN pip install \
         "httpx>=0.27"
 
 # App code.
-COPY hub.py media.py config.py auth.py admin.py viewer.py main.py ./
+COPY hub.py media.py config.py auth.py admin.py viewer.py drive.py main.py ./
 COPY templates ./templates
 
 # Uploaded videos live here; mount a volume to persist them.
