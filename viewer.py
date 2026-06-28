@@ -23,7 +23,7 @@ async def index():
     return HTMLResponse(html)
 
 
-@app.get("/video/{filename}")
+@app.get("/video/{filename:path}")
 async def video(filename: str, request: Request):
     return serve_video(filename, request)
 

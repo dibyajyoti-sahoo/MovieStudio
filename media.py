@@ -20,9 +20,15 @@ _CHUNK = 1024 * 1024  # 1 MiB
 
 
 def safe_path(filename: str) -> Path | None:
-    """Resolve a filename inside UPLOAD_DIR, refusing path traversal."""
-    p = (UPLOAD_DIR / filename).resolve()
-    if UPLOAD_DIR.resolve() not in p.parents or not p.is_file():
+    """Resolve a (possibly nested, e.g. '2026-06/movie.mp4') filename inside
+    UPLOAD_DIR, refusing path traversal."""
+    base = UPLOAD_DIR.resolve()
+    p = (base / filename).resolve()
+    try:
+        p.relative_to(base)
+    except ValueError:
+        return None
+    if not p.is_file():
         return None
     return p
 

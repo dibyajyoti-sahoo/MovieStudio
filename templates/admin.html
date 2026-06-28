@@ -40,6 +40,17 @@
   .guest button { padding: 6px 12px; font-size: 13px; }
   .approve { background: #1e7a3c; }
   .deny, .kick { background: #7a2330; }
+  .or { text-align: center; color: #6b6f7c; font-size: 12px; margin: 12px 0;
+        text-transform: uppercase; letter-spacing: .08em; }
+  .progress-wrap { margin-top: 12px; display: none; }
+  .progress-wrap.show { display: block; }
+  .bar-track { height: 10px; background: #0e0f13; border: 1px solid #2c2f3a;
+        border-radius: 999px; overflow: hidden; }
+  .bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#2a6df4,#6fd28a);
+        transition: width .2s ease; }
+  .bar-fill.indet { width: 35% !important; animation: slide 1.1s ease-in-out infinite; }
+  @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+  .progress-label { font-size: 13px; color: #a9adba; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -56,10 +67,26 @@
 <main>
 
   <div class="card">
-    <label>Upload a video (browser-playable: mp4, webm, m4v, mov)</label>
+    <label>Add a video — any format (mp4, mkv, mov, avi, wav, …). Stored by month.</label>
     <div class="row">
-      <input type="file" id="fileInput" accept="video/*">
+      <input type="file" id="fileInput" accept="video/*,audio/*,.mkv,.avi,.wmv,.flv,.ts,.m2ts,.vob,.mxf">
       <button id="uploadBtn" style="flex:0 0 auto;">Upload</button>
+    </div>
+
+    <div class="or">— or paste a public Google Drive link —</div>
+    <div class="row">
+      <input type="text" id="driveInput" placeholder="https://drive.google.com/file/d/…/view"
+             style="width:100%; padding:9px; background:#0e0f13; color:#e8e8ea;
+                    border:1px solid #2c2f3a; border-radius:8px; font-size:14px;">
+      <button id="driveBtn" style="flex:0 0 auto;">Import</button>
+    </div>
+    <div class="muted" style="margin-top:6px;">
+      The file must be shared as “Anyone with the link”. It’s downloaded onto the server and stored like an upload.
+    </div>
+
+    <div class="progress-wrap" id="progWrap">
+      <div class="bar-track"><div class="bar-fill" id="progFill"></div></div>
+      <div class="progress-label" id="progLabel"></div>
     </div>
     <div id="uploadStatus" class="muted" style="margin-top:8px;"></div>
   </div>
@@ -200,25 +227,38 @@ function esc(s) { return String(s).replace(/[&<>"']/g, c =>
 // The admin's own player is the source of truth — no remote state to apply.
 let suppress = false;
 
+// Build a /video URL that keeps the month "/" separators but encodes each segment.
+function videoUrl(p) {
+  return '/video/' + String(p).split('/').map(encodeURIComponent).join('/');
+}
+
 function loadFile(name, broadcast = true) {
   player.setAttribute('data-file', name);
-  player.src = `/video/${encodeURIComponent(name)}`;
+  player.src = videoUrl(name);
   videoSelect.value = name;
-  statusEl.textContent = `Loaded: ${name}`;
+  statusEl.textContent = `Loaded: ${name.split('/').pop()}`;
   player.load();
   if (broadcast) send({ action: 'load', filename: name });
 }
 
-// ---- populate video list ----
+// ---- populate video list, grouped by month ----
 async function refreshVideos(selectName) {
   const r = await fetch('/videos'); const d = await r.json();
   videoSelect.innerHTML = '';
-  if (!d.videos.length) {
-    const o = document.createElement('option'); o.textContent = '— no videos uploaded yet —'; o.value='';
-    videoSelect.appendChild(o);
+  let any = false;
+  for (const g of (d.groups || [])) {
+    if (!g.videos.length) continue;
+    const og = document.createElement('optgroup'); og.label = g.label;
+    for (const v of g.videos) {
+      const o = document.createElement('option');
+      o.value = v.path; o.textContent = v.name;
+      og.appendChild(o); any = true;
+    }
+    videoSelect.appendChild(og);
   }
-  for (const v of d.videos) {
-    const o = document.createElement('option'); o.value = v; o.textContent = v;
+  if (!any) {
+    const o = document.createElement('option');
+    o.textContent = '— no videos uploaded yet —'; o.value = '';
     videoSelect.appendChild(o);
   }
   const pick = selectName || d.current;
@@ -227,18 +267,93 @@ async function refreshVideos(selectName) {
 
 videoSelect.onchange = () => { if (videoSelect.value) loadFile(videoSelect.value, true); };
 
-// ---- upload ----
-document.getElementById('uploadBtn').onclick = async () => {
+// ---- progress bar helpers ----
+const progWrap = document.getElementById('progWrap');
+const progFill = document.getElementById('progFill');
+const progLabel = document.getElementById('progLabel');
+function showProg(label, pct) {
+  progWrap.classList.add('show');
+  progLabel.textContent = label;
+  if (pct === null || pct === undefined) { progFill.classList.add('indet'); progFill.style.width = '35%'; }
+  else { progFill.classList.remove('indet'); progFill.style.width = Math.max(0, Math.min(100, pct)) + '%'; }
+}
+function hideProg() { progWrap.classList.remove('show'); progFill.classList.remove('indet'); progFill.style.width = '0%'; }
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  const u = ['B','KB','MB','GB','TB']; let i = 0;
+  while (n >= 1024 && i < u.length-1) { n /= 1024; i++; }
+  return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+}
+
+// ---- file upload (real-time progress via XHR) ----
+document.getElementById('uploadBtn').onclick = () => {
   const f = document.getElementById('fileInput').files[0];
   const st = document.getElementById('uploadStatus');
   if (!f) { st.textContent = 'Choose a file first.'; return; }
-  st.textContent = `Uploading ${f.name}…`;
+  st.textContent = '';
+  showProg(`Uploading ${f.name}…`, 0);
   const fd = new FormData(); fd.append('file', f);
-  const r = await fetch('/upload', { method: 'POST', body: fd });
-  const d = await r.json();
-  if (!r.ok) { st.textContent = '❌ ' + (d.error || 'Upload failed'); return; }
-  st.textContent = `✅ Uploaded ${d.filename}`;
-  await refreshVideos(d.filename);
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/upload');
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) {
+      const pct = e.loaded / e.total * 100;
+      showProg(`Uploading ${f.name}… ${Math.round(pct)}% (${fmtBytes(e.loaded)} / ${fmtBytes(e.total)})`, pct);
+    } else { showProg(`Uploading ${f.name}…`, null); }
+  };
+  xhr.onload = async () => {
+    if (xhr.status === 401) { location.href = '/login'; return; }
+    let d = {}; try { d = JSON.parse(xhr.responseText); } catch (e) {}
+    hideProg();
+    if (xhr.status < 200 || xhr.status >= 300) { st.textContent = '❌ ' + (d.error || 'Upload failed'); return; }
+    st.textContent = `✅ Uploaded ${d.filename.split('/').pop()}`;
+    await refreshVideos(d.filename);
+  };
+  xhr.onerror = () => { hideProg(); st.textContent = '❌ Upload failed (network error).'; };
+  xhr.send(fd);
+};
+
+// ---- Google Drive import (server downloads; we poll progress) ----
+document.getElementById('driveBtn').onclick = async () => {
+  const inp = document.getElementById('driveInput');
+  const st = document.getElementById('uploadStatus');
+  const url = inp.value.trim();
+  if (!url) { st.textContent = 'Paste a Google Drive link first.'; return; }
+  st.textContent = '';
+  showProg('Contacting Google Drive…', null);
+  let job;
+  try {
+    const r = await fetch('/upload_drive', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    if (r.status === 401) { location.href = '/login'; return; }
+    job = await r.json();
+    if (!r.ok) { hideProg(); st.textContent = '❌ ' + (job.error || 'Could not start import.'); return; }
+  } catch (e) { hideProg(); st.textContent = '❌ Could not start import.'; return; }
+
+  const id = job.job_id;
+  const tick = setInterval(async () => {
+    let p;
+    try { const r = await fetch('/drive_progress/' + id); p = await r.json(); }
+    catch (e) { return; }
+    if (p.status === 'error') {
+      clearInterval(tick); hideProg(); st.textContent = '❌ ' + (p.error || 'Download failed.'); return;
+    }
+    if (p.status === 'done') {
+      clearInterval(tick); hideProg(); inp.value = '';
+      st.textContent = `✅ Imported ${(p.filename || '')}`;
+      await refreshVideos(p.rel);
+      return;
+    }
+    const name = p.filename ? `“${p.filename}” ` : '';
+    if (p.total) {
+      const pct = p.downloaded / p.total * 100;
+      showProg(`Downloading ${name}${Math.round(pct)}% (${fmtBytes(p.downloaded)} / ${fmtBytes(p.total)})`, pct);
+    } else {
+      showProg(`Downloading ${name}${fmtBytes(p.downloaded || 0)}…`, null);
+    }
+  }, 700);
 };
 
 // ---- admin controls -> broadcast ----

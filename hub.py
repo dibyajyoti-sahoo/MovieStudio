@@ -12,11 +12,49 @@ from __future__ import annotations
 
 import secrets
 import time
+from datetime import datetime
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+
+# --- month-wise storage helpers ---------------------------------------------
+def current_month() -> str:
+    """The folder name for "now", e.g. '2026-06'."""
+    return datetime.now().strftime("%Y-%m")
+
+
+def month_dir(month: str | None = None) -> Path:
+    """Return (creating if needed) uploads/<YYYY-MM>/ for the given month."""
+    sub = month or current_month()
+    d = UPLOAD_DIR / sub
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def month_label(month: str) -> str:
+    """Human label for a month folder, e.g. '2026-06' -> 'June 2026'."""
+    try:
+        return datetime.strptime(month, "%Y-%m").strftime("%B %Y")
+    except ValueError:
+        return month or "Other"
+
+
+def unique_dest(directory: Path, filename: str) -> Path:
+    """A non-colliding destination path inside `directory` for `filename`."""
+    name = Path(filename).name or "file"
+    dest = directory / name
+    if not dest.exists():
+        return dest
+    stem, suffix = dest.stem, dest.suffix
+    i = 1
+    while True:
+        cand = directory / f"{stem} ({i}){suffix}"
+        if not cand.exists():
+            return cand
+        i += 1
 
 
 @dataclass

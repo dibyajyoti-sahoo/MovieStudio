@@ -15,13 +15,53 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import config
 import auth
-from hub import hub, UPLOAD_DIR
+import drive
+from hub import hub, UPLOAD_DIR, month_dir, month_label, unique_dest
 from media import serve_video
 
 app = FastAPI(title="MovieHouse Admin")
 TEMPLATES = Path(__file__).parent / "templates"
 
-ALLOWED_EXT = {".mp4", ".webm", ".ogg", ".ogv", ".m4v", ".mov"}
+# Formats that play natively in most browsers (no conversion needed).
+BROWSER_EXT = {".mp4", ".webm", ".ogg", ".ogv", ".m4v", ".mov", ".m4a", ".mp3", ".aac"}
+
+# Everything we accept and store as-is. Browser-playable ones play inline;
+# others are stored/served and play depending on the viewer's browser/codecs.
+ALLOWED_EXT = BROWSER_EXT | {
+    # video
+    ".mkv", ".avi", ".wmv", ".flv", ".f4v", ".mpeg", ".mpg", ".mpe", ".m2v",
+    ".3gp", ".3g2", ".ts", ".mts", ".m2ts", ".vob", ".divx", ".mxf", ".rm",
+    ".rmvb", ".asf", ".dat", ".ogm", ".mp2",
+    # audio
+    ".wav", ".flac", ".opus", ".wma", ".alac", ".aiff", ".amr",
+}
+
+
+# Drive jobs already pushed into shared playback state (avoid re-loading).
+_drive_loaded: set[str] = set()
+
+
+def _list_groups() -> dict:
+    """Walk uploads/ recursively and group videos by their month folder
+    (newest month first). Loose files at the root fall under 'Other'."""
+    base = UPLOAD_DIR.resolve()
+    groups: dict[str, list] = {}
+    for p in base.rglob("*"):
+        if not p.is_file() or p.suffix.lower() not in ALLOWED_EXT:
+            continue
+        rel = p.relative_to(base)
+        month = rel.parts[0] if len(rel.parts) > 1 else ""
+        groups.setdefault(month, []).append(
+            {"path": rel.as_posix(), "name": p.name, "month": month})
+    ordered = sorted(groups.keys(), key=lambda m: (m == "", m), reverse=True)
+    return {
+        "groups": [
+            {"month": m, "label": month_label(m) if m else "Other",
+             "videos": sorted(groups[m], key=lambda v: v["name"].lower())}
+            for m in ordered
+        ],
+        "current": hub.state.filename,
+    }
 
 
 def _render(name: str, **ctx: str) -> str:
@@ -92,28 +132,60 @@ async def upload(request: Request, file: UploadFile = File(...)):
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXT:
         return JSONResponse(
-            {"error": f"Unsupported type '{ext}'. Browser-playable formats: "
-                      f"{', '.join(sorted(ALLOWED_EXT))}. Convert MKV/AVI with ffmpeg first."},
+            {"error": f"Unsupported type '{ext}'. Supported: "
+                      f"{', '.join(sorted(ALLOWED_EXT))}."},
             status_code=400,
         )
-    safe = Path(file.filename).name
-    dest = UPLOAD_DIR / safe
+    dest = unique_dest(month_dir(), Path(file.filename).name)
     with dest.open("wb") as out:
         shutil.copyfileobj(file.file, out)
-    hub.apply_admin_event({"action": "load", "filename": safe})
-    return {"filename": safe}
+    rel = dest.relative_to(UPLOAD_DIR).as_posix()
+    hub.apply_admin_event({"action": "load", "filename": rel})
+    return {"filename": rel}
+
+
+@app.post("/upload_drive")
+async def upload_drive(request: Request):
+    """Start downloading a public Google Drive file into this month's folder.
+    Returns a job id the client polls via /drive_progress/{job_id}."""
+    if not _current_email(request):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    body = await request.json()
+    url = (body or {}).get("url", "")
+    if not drive.extract_id(url):
+        return JSONResponse(
+            {"error": "That doesn't look like a Google Drive link."},
+            status_code=400)
+    job_id = drive.start_download(url, month_dir(), ALLOWED_EXT)
+    return {"job_id": job_id}
+
+
+@app.get("/drive_progress/{job_id}")
+async def drive_progress(request: Request, job_id: str):
+    if not _current_email(request):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    job = drive.get_job(job_id)
+    if not job:
+        return JSONResponse({"error": "unknown job"}, status_code=404)
+    # On completion, hand the client the relative path and load it into shared
+    # playback state exactly once.
+    if job.get("status") == "done" and job.get("path"):
+        rel = Path(job["path"]).relative_to(UPLOAD_DIR).as_posix()
+        job["rel"] = rel
+        if job_id not in _drive_loaded:
+            _drive_loaded.add(job_id)
+            hub.apply_admin_event({"action": "load", "filename": rel})
+    return job
 
 
 @app.get("/videos")
 async def list_videos(request: Request):
     if not _current_email(request):
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    files = sorted(p.name for p in UPLOAD_DIR.iterdir()
-                   if p.suffix.lower() in ALLOWED_EXT)
-    return {"videos": files, "current": hub.state.filename}
+    return _list_groups()
 
 
-@app.get("/video/{filename}")
+@app.get("/video/{filename:path}")
 async def video(request: Request, filename: str):
     if not _current_email(request):
         return JSONResponse({"error": "Not authenticated"}, status_code=401)

@@ -163,7 +163,7 @@ function applyState(s) {
   if (!s.filename) { tag.textContent = 'waiting for host to load a video…'; return; }
   if (player.getAttribute('data-file') !== s.filename) {
     player.setAttribute('data-file', s.filename);
-    player.src = `/video/${encodeURIComponent(s.filename)}`;
+    player.src = '/video/' + String(s.filename).split('/').map(encodeURIComponent).join('/');
     player.load();
   }
   const target = s.position + (s.is_playing ? (Date.now()/1000 - s.server_time) * s.rate : 0);
